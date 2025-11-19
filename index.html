@@ -26,6 +26,17 @@
             animation: spin 1s linear infinite; margin-bottom: 15px;
         }
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+
+        /* Mobile Warning Box */
+        .mobile-warning {
+            background-color: #fff3cd;
+            border-left: 4px solid #ffc107;
+            color: #856404;
+            padding: 15px;
+            margin-bottom: 20px;
+            font-size: 0.9rem;
+            border-radius: 4px;
+        }
     </style>
 </head>
 <body class="bg-gray-50">
@@ -42,12 +53,12 @@
 
     <div id="app" class="flex items-center justify-center p-4"></div>
 
-    <div id="violationModal" class="fixed inset-0 bg-black bg-opacity-70 hidden items-center justify-center z-50 transition-opacity duration-300">
+    <div id="violationModal" class="fixed inset-0 bg-black bg-opacity-80 hidden items-center justify-center z-50 transition-opacity duration-300">
         <div class="bg-white rounded-xl shadow-2xl max-w-sm w-full p-6 text-center">
-            <i class="fas fa-exclamation-triangle text-4xl text-yellow-500 mb-4"></i>
-            <h3 class="text-xl font-bold text-gray-900 mb-3">Exam Violation Detected!</h3>
+            <i class="fas fa-exclamation-triangle text-4xl text-red-500 mb-4"></i>
+            <h3 class="text-xl font-bold text-gray-900 mb-3">Access Denied!</h3>
             <p id="violationMessage" class="text-gray-600 mb-6 text-sm"></p>
-            <button id="modalConfirmBtn" class="w-full py-2 px-4 rounded-lg text-white font-semibold bg-yellow-600 hover:bg-yellow-700 transition">I Understand</button>
+            <button id="modalConfirmBtn" class="w-full py-2 px-4 rounded-lg text-white font-semibold bg-red-600 hover:bg-red-700 transition">I Understand</button>
         </div>
     </div>
     
@@ -109,6 +120,7 @@
         let proctoringViolations = { total: 0, windowSwitch: 0, copyPaste: 0 };
         const MAX_VIOLATIONS = 3;
         let violationCooldown = false; 
+        let lastInnerHeight = window.innerHeight; // For mobile resize detection
 
         // DOM Elements
         const APP_CONTAINER = document.getElementById('app');
@@ -133,6 +145,13 @@
             });
         }
 
+        function shuffleArray(array) {
+            for (let i = array.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [array[i], array[j]] = [array[j], array[i]];
+            }
+        }
+
         function setView(viewName) {
             VIOLATION_MODAL.style.display = 'none';
             QUIZ_OFF_MODAL.style.display = 'none'; 
@@ -150,7 +169,6 @@
             else if (viewName === 'leaderboard') renderLeaderboard(); 
         }
 
-        // --- NEW FUNCTION: Show Quiz Off Modal ---
         function showQuizOffModal() {
             const msg = document.getElementById('quizOffMessage');
             if (msg) {
@@ -200,7 +218,6 @@
         // --- DATABASE UPLOAD LOGIC ---
         async function uploadResultToSupabase(resultData) {
             const submissionUUID = generateUUID(); 
-
             const dataToInsert = {
                 student_id: submissionUUID,
                 quiz_id: STATIC_QUIZ_UUID,
@@ -215,19 +232,10 @@
                 college_email: resultData.email,
                 admission_no: resultData.admissionNo,
             };
-
             try {
-                const { data, error } = await client
-                    .from(SUPABASE_TABLE_NAME)
-                    .insert([dataToInsert])
-                    .select(); 
-
-                if (error) {
-                    console.error('SUPABASE ERROR:', error);
-                    throw error; 
-                }
+                const { data, error } = await client.from(SUPABASE_TABLE_NAME).insert([dataToInsert]).select(); 
+                if (error) throw error; 
                 return { success: true };
-
             } catch (e) {
                 console.error('Upload Exception:', e);
                 if(e.message && e.message.includes("row-level security")) {
@@ -237,7 +245,7 @@
             }
         }
 
-        // --- PROCTORING ---
+        // --- AGGRESSIVE PROCTORING LOGIC ---
         function requestFullScreen() {
             const element = document.documentElement;
             if (element.requestFullscreen) element.requestFullscreen().catch(e => console.log("Fullscreen denied", e));
@@ -254,9 +262,12 @@
         }
         
         function showViolationModal(isTerminating) {
+            if (VIOLATION_MODAL.style.display === 'flex') return; // Avoid stacking modals
+
             if (isTerminating) {
-                VIOLATION_MESSAGE.innerHTML = `<p class="text-red-700 font-semibold">FINAL WARNING: ${MAX_VIOLATIONS} violations detected.</p><p>Exam terminated.</p>`;
-                MODAL_CONFIRM_BTN.textContent = 'End Exam';
+                VIOLATION_MESSAGE.innerHTML = `<p class="text-red-700 font-bold mb-2">EXAM TERMINATED</p><p>You exceeded the maximum allowed violations (${MAX_VIOLATIONS}).</p>`;
+                MODAL_CONFIRM_BTN.textContent = 'Submit Exam Now';
+                MODAL_CONFIRM_BTN.className = "w-full py-2 px-4 rounded-lg text-white font-semibold bg-red-600 hover:bg-red-700 transition";
                 MODAL_CONFIRM_BTN.onclick = () => {
                     VIOLATION_MODAL.style.display = 'none';
                     stopTimer();
@@ -265,11 +276,17 @@
                     calculateAndShowResults(true); 
                 };
             } else {
-                VIOLATION_MESSAGE.innerHTML = `Do not switch tabs. <span class="font-bold">Total: ${proctoringViolations.total}/${MAX_VIOLATIONS}.</span>`;
-                MODAL_CONFIRM_BTN.textContent = 'Return to Quiz';
+                VIOLATION_MESSAGE.innerHTML = `
+                    <p class="font-bold text-gray-900">⚠️ SUSPICIOUS ACTIVITY</p>
+                    <p class="mt-2">Switched tabs, lost focus, or <span class="font-bold text-red-600">accessed Notification Panel</span>.</p>
+                    <p class="mt-2 font-bold text-sm">Violation ${proctoringViolations.total}/${MAX_VIOLATIONS}</p>
+                `;
+                MODAL_CONFIRM_BTN.textContent = 'Resume Quiz';
+                MODAL_CONFIRM_BTN.className = "w-full py-2 px-4 rounded-lg text-white font-semibold bg-yellow-600 hover:bg-yellow-700 transition";
                 MODAL_CONFIRM_BTN.onclick = () => {
                     VIOLATION_MODAL.style.display = 'none';
                     requestFullScreen(); 
+                    violationCooldown = false; 
                 };
             }
             VIOLATION_MODAL.style.display = 'flex';
@@ -277,28 +294,57 @@
 
         function handleProctoringViolation(type) {
             if (currentQuestionIndex >= quizQuestions.length) return; 
+            if (violationCooldown) return; 
             
             if (type === 'windowSwitch') {
-                if (violationCooldown) return; 
-                proctoringViolations.windowSwitch++;
                 violationCooldown = true;
-                setTimeout(() => { violationCooldown = false; }, 2000);
-                requestFullScreen(); 
+                proctoringViolations.windowSwitch++;
+                proctoringViolations.total++;
+                requestFullScreen(); // Attempt to force back
             } 
-            else if (type === 'copyPaste') proctoringViolations.copyPaste++;
+            else if (type === 'copyPaste') {
+                proctoringViolations.copyPaste++;
+                proctoringViolations.total++;
+            }
             else return; 
-            
-            proctoringViolations.total++;
 
             const vDisplay = document.getElementById('violationCountDisplay');
             if (vDisplay) vDisplay.innerHTML = `⚠️ Violations: ${proctoringViolations.total} / ${MAX_VIOLATIONS}`;
 
             if (proctoringViolations.total >= MAX_VIOLATIONS) showViolationModal(true); 
-            else if (type === 'windowSwitch') showViolationModal(false); 
+            else showViolationModal(false); 
         }
         
-        const visibilityChangeHandler = () => { if (document.hidden) handleProctoringViolation('windowSwitch'); };
-        const blurHandler = () => { handleProctoringViolation('windowSwitch'); };
+        // --- AGGRESSIVE EVENT HANDLERS ---
+        
+        // 1. Standard Visibility Change (Tab Switching)
+        const visibilityChangeHandler = () => { 
+            if (document.hidden) handleProctoringViolation('windowSwitch'); 
+        };
+        
+        // 2. Blur & FocusOut (Catches Notification Panel Pull-Down)
+        const blurHandler = () => { 
+            // Immediate triggering on blur
+            handleProctoringViolation('windowSwitch'); 
+        };
+
+        // 3. Resize Detection (Catches keyboard popping up or Status Bar changes on mobile)
+        const resizeHandler = () => {
+            // On mobile, pulling down the notification bar sometimes resizes the inner height slightly
+            // or if they try to use split screen.
+            const newHeight = window.innerHeight;
+            const heightDiff = Math.abs(newHeight - lastInnerHeight);
+            
+            // If height changes significantly (but not just a small browser chrome adjustment)
+            // We ignore keyboard opens usually, but strict mode might want to flag it.
+            // Here we flag unexpected resizes.
+            if (heightDiff > 100 && !document.fullscreenElement) {
+                 // This helps detect if they exited fullscreen to access other apps
+                 handleProctoringViolation('windowSwitch');
+            }
+            lastInnerHeight = newHeight;
+        };
+        
         const copyCutPasteHandler = (e) => {
             e.preventDefault();
             showTempMessage('Content protected.', true); 
@@ -307,18 +353,27 @@
 
         function enableProctoring() {
             document.addEventListener('visibilitychange', visibilityChangeHandler);
-            window.addEventListener('blur', blurHandler);
+            window.addEventListener('blur', blurHandler);       // Standard blur
+            window.addEventListener('focusout', blurHandler);   // Additional Aggressive Check
+            window.addEventListener('resize', resizeHandler);   // Detect screen size changes
+            
             document.addEventListener('copy', copyCutPasteHandler);
             document.addEventListener('cut', copyCutPasteHandler);
             document.addEventListener('paste', copyCutPasteHandler);
+            
+            // Prevent Right Click
+            document.addEventListener('contextmenu', event => event.preventDefault());
         }
 
         function disableProctoring() {
             document.removeEventListener('visibilitychange', visibilityChangeHandler);
             window.removeEventListener('blur', blurHandler);
+            window.removeEventListener('focusout', blurHandler);
+            window.removeEventListener('resize', resizeHandler);
             document.removeEventListener('copy', copyCutPasteHandler);
             document.removeEventListener('cut', copyCutPasteHandler);
             document.removeEventListener('paste', copyCutPasteHandler);
+            document.removeEventListener('contextmenu', event => event.preventDefault());
         }
 
         // --- TIMER & LOGIC ---
@@ -366,6 +421,17 @@
             APP_CONTAINER.innerHTML = `
                 <div class="w-full max-w-md bg-white rounded-xl shadow-2xl p-8">
                     <h2 class="text-3xl font-extrabold text-center text-gray-900 mb-6">Quiz Sign-In</h2>
+                    
+                    <div class="mobile-warning">
+                        <p class="font-bold"><i class="fas fa-mobile-alt mr-2"></i>Strict Mode Warning:</p>
+                        <ul class="list-disc ml-5 mt-2 space-y-1">
+                            <li><strong>Do NOT touch the notification panel.</strong></li>
+                            <li>Do NOT pull down the status bar.</li>
+                            <li>Incoming calls will terminate the exam.</li>
+                        </ul>
+                        <p class="mt-2 text-red-600 font-bold text-xs text-center">ANY INTERACTION OUTSIDE THE QUIZ AREA IS A VIOLATION.</p>
+                    </div>
+
                     <form id="signInForm" class="space-y-4">
                         <div><label class="block text-sm font-medium text-gray-700">Name</label><input type="text" id="studentName" required class="mt-1 block w-full px-4 py-2 border rounded-lg"></div>
                         <div><label class="block text-sm font-medium text-gray-700">Email</label><input type="email" id="collegeEmail" required class="mt-1 block w-full px-4 py-2 border rounded-lg"></div>
@@ -376,16 +442,17 @@
 
             document.getElementById('signInForm').addEventListener('submit', function(e) {
                 e.preventDefault();
-                // Check if quiz is enabled before starting
-                if (!isQuizActive) { 
-                    showQuizOffModal(); 
-                    return; 
-                }
+                if (!isQuizActive) { showQuizOffModal(); return; }
+
                 studentInfo = {
                     name: document.getElementById('studentName').value.trim(),
                     email: document.getElementById('collegeEmail').value.trim(),
                     admissionNo: document.getElementById('admissionNo').value.trim()
                 };
+
+                shuffleArray(quizQuestions);
+                studentResponses = Array(quizQuestions.length).fill(null);
+
                 requestFullScreen();
                 enableProctoring();
                 setView('quiz');
@@ -438,19 +505,10 @@
 
         async function calculateAndShowResults(wasTerminated) {
             LOADING_OVERLAY.style.display = 'flex';
-
             let score = 0;
             quizQuestions.forEach((q, idx) => { if (studentResponses[idx] === q.answer) score++; });
-
-            // Save Locally for backup
-            const result = saveResultLocally(
-                studentInfo.name, studentInfo.email, studentInfo.admissionNo, 
-                score, quizQuestions.length, proctoringViolations
-            );
-
-            // Upload to Supabase
+            const result = saveResultLocally(studentInfo.name, studentInfo.email, studentInfo.admissionNo, score, quizQuestions.length, proctoringViolations);
             const uploadStatus = await uploadResultToSupabase(result);
-
             LOADING_OVERLAY.style.display = 'none';
             renderFinalScreen(score, wasTerminated, uploadStatus);
         }
@@ -508,28 +566,22 @@
 
         // --- SUPABASE LEADERBOARD WITH FILTERS ---
         function renderLeaderboard() {
-            // 1. Render UI Skeleton with Filters
             APP_CONTAINER.className = "flex items-start justify-center min-h-screen p-4 bg-gray-100";
             APP_CONTAINER.innerHTML = `
                 <div class="w-full max-w-6xl bg-white rounded-2xl shadow-xl p-8 mt-10">
                     <div class="flex flex-col md:flex-row justify-between items-center mb-6 gap-4">
                         <h2 class="text-2xl font-bold text-gray-800">Leaderboard</h2>
-                        
                         <div class="flex flex-wrap gap-2">
                             <button id="refreshBtn" class="px-4 py-2 bg-indigo-500 hover:bg-indigo-600 text-white rounded-lg shadow text-sm"><i class="fas fa-sync-alt mr-1"></i> Refresh</button>
                             <button id="quizToggle" class="px-4 py-2 text-white rounded-lg ${isQuizActive ? 'bg-green-600' : 'bg-red-600'} text-sm">Quiz: ${isQuizActive?'ON':'OFF'}</button>
                             <button id="homeBtn" class="px-4 py-2 border rounded-lg text-blue-600 border-blue-600 hover:bg-blue-50 text-sm">Log Out</button>
                         </div>
                     </div>
-
                     <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6 p-4 bg-gray-50 rounded-lg border border-gray-200">
-                        <div>
-                            <label class="block text-xs font-semibold text-gray-500 mb-1">SEARCH</label>
-                            <input type="text" id="searchInput" placeholder="Name or Admission No..." class="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
-                        </div>
+                        <div><label class="block text-xs font-semibold text-gray-500 mb-1">SEARCH</label><input type="text" id="searchInput" placeholder="Name or Admission No..." class="w-full border rounded-lg px-3 py-2 text-sm"></div>
                         <div>
                             <label class="block text-xs font-semibold text-gray-500 mb-1">SORT BY</label>
-                            <select id="sortSelect" class="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white">
+                            <select id="sortSelect" class="w-full border rounded-lg px-3 py-2 text-sm bg-white">
                                 <option value="score_desc">Highest Score</option>
                                 <option value="score_asc">Lowest Score</option>
                                 <option value="violation_desc">Most Violations</option>
@@ -539,13 +591,9 @@
                         </div>
                         <div>
                             <label class="block text-xs font-semibold text-gray-500 mb-1">TIME FILTER</label>
-                            <select id="dateFilter" class="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white">
-                                <option value="all">All Time</option>
-                                <option value="today">Today</option>
-                            </select>
+                            <select id="dateFilter" class="w-full border rounded-lg px-3 py-2 text-sm bg-white"><option value="all">All Time</option><option value="today">Today</option></select>
                         </div>
                     </div>
-
                     <div class="overflow-x-auto rounded-lg border">
                         <table class="min-w-full divide-y divide-gray-200">
                             <thead class="bg-gray-100">
@@ -565,30 +613,15 @@
                     </div>
                 </div>`;
 
-            // Internal function to fetch data based on current inputs
             const fetchAndRender = async () => {
                 const tbody = document.getElementById('leaderboardBody');
                 tbody.innerHTML = `<tr><td colspan="6" class="p-10 text-center"><div class="spinner mx-auto"></div><p class="text-gray-500">Updating...</p></td></tr>`;
-
                 const searchTerm = document.getElementById('searchInput').value.trim();
                 const sortValue = document.getElementById('sortSelect').value;
                 const dateFilter = document.getElementById('dateFilter').value;
-
                 let query = client.from(SUPABASE_TABLE_NAME).select('*');
-
-                // Apply Search
-                if (searchTerm) {
-                    query = query.or(`student_name.ilike.%${searchTerm}%,admission_no.ilike.%${searchTerm}%`);
-                }
-
-                // Apply Date Filter
-                if (dateFilter === 'today') {
-                    const todayStart = new Date();
-                    todayStart.setHours(0,0,0,0);
-                    query = query.gte('submission_time', todayStart.toISOString());
-                }
-
-                // Apply Sorting
+                if (searchTerm) query = query.or(`student_name.ilike.%${searchTerm}%,admission_no.ilike.%${searchTerm}%`);
+                if (dateFilter === 'today') { const todayStart = new Date(); todayStart.setHours(0,0,0,0); query = query.gte('submission_time', todayStart.toISOString()); }
                 switch(sortValue) {
                     case 'score_desc': query = query.order('score', { ascending: false }); break;
                     case 'score_asc': query = query.order('score', { ascending: true }); break;
@@ -597,62 +630,33 @@
                     case 'date_asc': query = query.order('submission_time', { ascending: true }); break;
                     default: query = query.order('score', { ascending: false });
                 }
-
-                if (!sortValue.includes('date')) {
-                    query = query.order('submission_time', { ascending: false });
-                }
+                if (!sortValue.includes('date')) query = query.order('submission_time', { ascending: false });
 
                 try {
                     const { data, error } = await query;
-
                     if (error) throw error;
-
-                    if (!data || data.length === 0) {
-                        tbody.innerHTML = `<tr><td colspan="6" class="p-6 text-center text-gray-500">No records found matching criteria.</td></tr>`;
-                        return;
-                    }
-
+                    if (!data || data.length === 0) { tbody.innerHTML = `<tr><td colspan="6" class="p-6 text-center text-gray-500">No records found matching criteria.</td></tr>`; return; }
                     tbody.innerHTML = data.map((entry, i) => {
-                        const name = entry.student_name || 'Unknown';
-                        const adm = entry.admission_no || '-';
-                        const score = entry.score;
-                        const totalQ = entry.total_questions || 20;
-                        const viol = entry.total_violations || 0;
-                        const dateStr = entry.submission_time ? new Date(entry.submission_time).toLocaleString() : 'N/A';
-                        
                         return `
                         <tr class="${i%2?'bg-gray-50':'bg-white'} hover:bg-gray-100 transition">
                             <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 font-mono">${i+1}</td>
-                            <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">${name}</td>
-                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${adm}</td>
-                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900 font-bold">${score} / ${totalQ}</td>
-                            <td class="px-6 py-4 whitespace-nowrap text-sm ${viol>0?'text-red-600 font-bold':'text-green-600'}">${viol}</td>
-                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-400">${dateStr}</td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">${entry.student_name || 'Unknown'}</td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${entry.admission_no || '-'}</td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900 font-bold">${entry.score} / ${entry.total_questions || 20}</td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm ${entry.total_violations>0?'text-red-600 font-bold':'text-green-600'}">${entry.total_violations || 0}</td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-400">${entry.submission_time ? new Date(entry.submission_time).toLocaleString() : 'N/A'}</td>
                         </tr>`;
                     }).join('');
-                } catch (err) {
-                    console.error(err);
-                    tbody.innerHTML = `<tr><td colspan="6" class="p-6 text-center text-red-600">Error: ${err.message}</td></tr>`;
-                }
+                } catch (err) { console.error(err); tbody.innerHTML = `<tr><td colspan="6" class="p-6 text-center text-red-600">Error: ${err.message}</td></tr>`; }
             };
 
-            // Event Listeners
             document.getElementById('homeBtn').onclick = () => setView('signin');
-            document.getElementById('quizToggle').onclick = () => {
-                isQuizActive = !isQuizActive;
-                localStorage.setItem('isQuizActive', isQuizActive);
-                renderLeaderboard(); 
-            };
+            document.getElementById('quizToggle').onclick = () => { isQuizActive = !isQuizActive; localStorage.setItem('isQuizActive', isQuizActive); renderLeaderboard(); };
             document.getElementById('refreshBtn').onclick = fetchAndRender;
             document.getElementById('sortSelect').addEventListener('change', fetchAndRender);
             document.getElementById('dateFilter').addEventListener('change', fetchAndRender);
-            
             let searchTimeout;
-            document.getElementById('searchInput').addEventListener('input', () => {
-                clearTimeout(searchTimeout);
-                searchTimeout = setTimeout(fetchAndRender, 500);
-            });
-
+            document.getElementById('searchInput').addEventListener('input', () => { clearTimeout(searchTimeout); searchTimeout = setTimeout(fetchAndRender, 500); });
             fetchAndRender();
         }
 
@@ -660,12 +664,7 @@
         document.addEventListener('DOMContentLoaded', () => {
             setView('signin');
             ADMIN_BUTTON.onclick = () => setView('admin');
-            
-            // Initialize the quiz off modal close button
-            QUIZ_OFF_CONFIRM_BTN.onclick = () => {
-                QUIZ_OFF_MODAL.style.display = 'none';
-            };
-            
+            QUIZ_OFF_CONFIRM_BTN.onclick = () => { QUIZ_OFF_MODAL.style.display = 'none'; };
             const fsHandler = () => {
                 if (!document.fullscreenElement && !document.webkitFullscreenElement && currentQuestionIndex < quizQuestions.length && VIOLATION_MODAL.style.display !== 'flex') {
                     handleProctoringViolation('windowSwitch'); 
