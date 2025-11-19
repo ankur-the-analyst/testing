@@ -1,0 +1,597 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Proctored Business & Finance Quiz</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+    <!-- Supabase JS Library -->
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <style>
+        #app { min-height: 100vh; }
+        #adminButton { position: fixed; top: 10px; right: 10px; z-index: 100; }
+        #progressBarContainer { position: relative; height: 8px; background-color: #e5e7eb; border-radius: 4px; overflow: hidden; margin-bottom: 10px; }
+        #progressBar { height: 100%; width: 100%; background-color: #ef4444; transition: width 1s linear; }
+        #countdownTimer { font-size: 1.25rem; font-weight: 700; color: #ef4444; text-align: right; margin-bottom: 10px; }
+        
+        /* Loading Overlay */
+        #loadingOverlay {
+            position: fixed; inset: 0; background: rgba(255,255,255,0.9); 
+            z-index: 9999; display: none; flex-direction: column; 
+            align-items: center; justify-content: center;
+        }
+        .spinner {
+            border: 4px solid #f3f3f3; border-top: 4px solid #3498db; 
+            border-radius: 50%; width: 50px; height: 50px; 
+            animation: spin 1s linear infinite; margin-bottom: 15px;
+        }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    </style>
+</head>
+<body class="bg-gray-50">
+
+    <!-- Loading Overlay for Data Submission -->
+    <div id="loadingOverlay">
+        <div class="spinner"></div>
+        <h2 class="text-xl font-bold text-gray-800">Processing...</h2>
+        <p class="text-gray-500">Please wait.</p>
+    </div>
+
+    <button id="adminButton" class="bg-red-500 hover:bg-red-600 text-white font-semibold py-2 px-4 rounded-lg shadow-lg transition duration-150 ease-in-out text-sm">
+        <i class="fas fa-lock mr-2"></i>Admin Panel
+    </button>
+
+    <div id="app" class="flex items-center justify-center p-4"></div>
+
+    <!-- Violation Modal -->
+    <div id="violationModal" class="fixed inset-0 bg-black bg-opacity-70 hidden items-center justify-center z-50 transition-opacity duration-300">
+        <div class="bg-white rounded-xl shadow-2xl max-w-sm w-full p-6 text-center">
+            <i class="fas fa-exclamation-triangle text-4xl text-yellow-500 mb-4"></i>
+            <h3 class="text-xl font-bold text-gray-900 mb-3">Exam Violation Detected!</h3>
+            <p id="violationMessage" class="text-gray-600 mb-6 text-sm"></p>
+            <button id="modalConfirmBtn" class="w-full py-2 px-4 rounded-lg text-white font-semibold bg-yellow-600 hover:bg-yellow-700 transition">I Understand</button>
+        </div>
+    </div>
+    
+    <!-- Quiz Off Modal -->
+    <div id="quizOffModal" class="fixed inset-0 bg-black bg-opacity-70 hidden items-center justify-center z-50 transition-opacity duration-300">
+        <div class="bg-white rounded-xl shadow-2xl max-w-sm w-full p-6 text-center">
+            <i class="fas fa-pause-circle text-4xl text-blue-500 mb-4"></i>
+            <h3 class="text-xl font-bold text-gray-900 mb-3">Quiz is Currently Unavailable</h3>
+            <p id="quizOffMessage" class="text-gray-600 mb-6 text-sm">The examination is currently paused by the administrator.</p>
+            <button id="quizOffConfirmBtn" class="w-full py-2 px-4 rounded-lg text-white font-semibold bg-blue-600 hover:bg-blue-700 transition">Close</button>
+        </div>
+    </div>
+    
+    <script>
+        // --- SUPABASE CONFIGURATION ---
+        const SUPABASE_URL = 'https://tdxausibwaagbhnbgkgz.supabase.co'; 
+        const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRkeGF1c2lid2FhZ2JobmJna2d6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjMwNDgyMDYsImV4cCI6MjA3ODYyNDIwNn0.ApeJFTg-pQaV2gigOUTGpKnMY_AFnT1v5DPpYCCmOKY';
+        const SUPABASE_TABLE_NAME = 'quiz_submissions'; 
+
+        const STATIC_QUIZ_UUID = '5f4b3d2c-1a0e-9f8d-7c6b-5a4e3d2c1b0a';
+
+        // Initialize Supabase
+        const { createClient } = supabase;
+        const client = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+        // --- QUIZ DATA ---
+        const quizQuestions = [
+            { question: "Who is the CEO of Apple Inc.?", options: ["Steve Jobs", "Tim Cook", "Mark Zuckerberg", "Elon Musk"], answer: "Tim Cook" },
+            { question: "Who is the CEO of HDFC Bank (as of 2025)?", options: ["Aditya Puri", "Sashidhar Jagdishan", "N. Chandrasekaran", "Shailesh Chandra"], answer: "Sashidhar Jagdishan" },
+            { question: "Who is the CEO of Tata Sons?", options: ["N. Chandrasekaran", "Ratan Tata", "Cyrus Mistry", "Noel Tata"], answer: "N. Chandrasekaran" },
+            { question: "What does IPO stand for?", options: ["Initial Public Offering", "International Product Order", "Industrial Policy Objective", "Internal Purchase Option"], answer: "Initial Public Offering" },
+            { question: "What does KPI stand for?", options: ["Key Performance Indicator", "Knowledge Processing Index", "Key Product Inventory", "Known Profit Index"], answer: "Key Performance Indicator" },
+            { question: "What is a blue-chip company?", options: ["Large, established, financially sound firm", "New startup", "Government enterprise", "Small-cap company"], answer: "Large, established, financially sound firm" },
+            { question: "The 2025 Union Budget of India was presented on", options: ["1 January 2025", "1 February 2025", "1 March 2025", "1 April 2025"], answer: "1 March 2025" },
+            { question: "The term “start-up unicorn” refers to a private company valued at:", options: ["Over US $100 million", "Over US $1 billion", "Over US $500 million", "Over US $10 billion"], answer: "Over US $1 billion" },
+            { question: "The program “PLI scheme” in India is related to:", options: ["Private Lending Initiative", "Production Linked Incentive", "Public Listing Initiative", "Pension Linked Interest"], answer: "Production Linked Incentive" },
+            { question: "The parent company of Tanishq is:", options: ["Titan", "Reliance", "Aditya Birla Group", "Dabur"], answer: "Titan" },
+            { question: "“Think Different” is associated with:", options: ["Apple", "Microsoft", "Samsung", "Dell"], answer: "Apple" },
+            { question: "SEBI regulates:", options: ["Stock Market in India", "Banking Sector", "Insurance Companies", "E-commerce"], answer: "Stock Market in India" },
+            { question: "“The Big Four” accounting firms include all except:", options: ["Deloitte", "PwC", "EY", "KPMG India Limited"], answer: "KPMG India Limited" },
+            { question: "Which is the largest public sector bank in India?", options: ["State Bank of India", "Punjab National Bank", "Bank of Baroda", "Canara Bank"], answer: "State Bank of India" },
+            { question: "Who is the current Governor of RBI (2025)?", options: ["Shaktikanta Das", "Urjit Patel", "Raghuram Rajan", "D. Subbarao"], answer: "Shaktikanta Das" },
+            { question: "SBI’s tagline is:", options: ["“The Banker to Every Indian”", "“We Understand Your World”", "“Trusted Family Bank”", "“Your Perfect Partner”"], answer: "“The Banker to Every Indian”" },
+            { question: "The first Indian bank to open a branch outside India was:", options: ["Bank of India", "SBI", "PNB", "Canara Bank"], answer: "Bank of India" },
+            { question: "Which startup is known as “India’s leading edtech company”?", options: ["BYJU’S", "Unacademy", "Vedantu", "Simplilearn"], answer: "BYJU’S" },
+            { question: "Which company became India’s first to cross $250 billion market cap?", options: ["Reliance Industries", "Tata Consultancy Services", "Infosys", "HDFC Bank"], answer: "Reliance Industries" },
+            { question: "Which Indian bank ranked highest in “World’s Best Banks 2024” by Forbes?", options: ["HDFC Bank", "SBI", "Axis Bank", "ICICI"], answer: "HDFC Bank" }
+        ];
+
+        // --- STATE ---
+        let studentInfo = {};
+        let currentQuestionIndex = 0;
+        let studentResponses = Array(quizQuestions.length).fill(null);
+        let timerInterval;
+        const TIME_PER_QUESTION = 10; 
+        let timeLeft = TIME_PER_QUESTION;
+        let isQuizActive = localStorage.getItem('isQuizActive') === 'false' ? false : true; 
+        
+        // Violations
+        let proctoringViolations = { total: 0, windowSwitch: 0, copyPaste: 0 };
+        const MAX_VIOLATIONS = 3;
+        let violationCooldown = false; 
+
+        // DOM Elements
+        const APP_CONTAINER = document.getElementById('app');
+        const ADMIN_BUTTON = document.getElementById('adminButton');
+        const VIOLATION_MODAL = document.getElementById('violationModal');
+        const MODAL_CONFIRM_BTN = document.getElementById('modalConfirmBtn');
+        const VIOLATION_MESSAGE = document.getElementById('violationMessage');
+        const QUIZ_OFF_MODAL = document.getElementById('quizOffModal');
+        const QUIZ_OFF_CONFIRM_BTN = document.getElementById('quizOffConfirmBtn');
+        const LOADING_OVERLAY = document.getElementById('loadingOverlay');
+
+        // --- UTILITIES ---
+
+        function generateUUID() {
+            if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+                return crypto.randomUUID();
+            }
+            return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+                const r = Math.random() * 16 | 0;
+                const v = c === 'x' ? r : (r & 0x3 | 0x8);
+                return v.toString(16);
+            });
+        }
+
+        function setView(viewName) {
+            VIOLATION_MODAL.style.display = 'none';
+            QUIZ_OFF_MODAL.style.display = 'none'; 
+            LOADING_OVERLAY.style.display = 'none';
+
+            const signInForm = document.getElementById('signInForm');
+            if(signInForm) signInForm.style.display = 'block'; 
+
+            ADMIN_BUTTON.style.display = (viewName === 'quiz') ? 'none' : 'block';
+            APP_CONTAINER.innerHTML = '';
+
+            if (viewName === 'signin') renderSignIn();
+            else if (viewName === 'quiz') renderQuiz();
+            // Results is handled by calculateAndShowResults directly
+            else if (viewName === 'admin') renderAdminLogin();
+            else if (viewName === 'leaderboard') renderLeaderboard();
+        }
+
+        function showTempMessage(msg, isError = false) {
+            let tempDiv = document.getElementById('tempMessage');
+            if (!tempDiv) {
+                tempDiv = document.createElement('div');
+                tempDiv.id = 'tempMessage';
+                tempDiv.className = `fixed top-20 left-1/2 transform -translate-x-1/2 text-white px-6 py-3 rounded-lg shadow-xl z-[60] transition-opacity duration-300 font-medium`;
+                document.body.appendChild(tempDiv);
+            }
+            tempDiv.className = `fixed top-20 left-1/2 transform -translate-x-1/2 text-white px-6 py-3 rounded-lg shadow-xl z-[60] transition-opacity duration-300 font-medium ${isError ? 'bg-red-600' : 'bg-green-600'}`;
+            tempDiv.textContent = msg;
+            tempDiv.style.opacity = '1';
+            setTimeout(() => { tempDiv.style.opacity = '0'; }, 4000);
+        }
+
+        // --- DATABASE UPLOAD LOGIC ---
+        async function uploadResultToSupabase(resultData) {
+            const submissionUUID = generateUUID(); 
+
+            const dataToInsert = {
+                student_id: submissionUUID,
+                quiz_id: STATIC_QUIZ_UUID,
+                score: resultData.score,
+                total_questions: resultData.total,
+                percentage: resultData.percentage.toString(), 
+                total_violations: resultData.violations,
+                window_switch_violations: resultData.windowSwitchViolations,
+                copy_paste_violations: resultData.copyPasteViolations,
+                submission_time: new Date().toISOString(),
+                student_name: resultData.name,
+                college_email: resultData.email,
+                admission_no: resultData.admissionNo,
+            };
+
+            console.log("Submitting to Supabase:", dataToInsert);
+
+            try {
+                const { data, error } = await client
+                    .from(SUPABASE_TABLE_NAME)
+                    .insert([dataToInsert])
+                    .select(); 
+
+                if (error) {
+                    console.error('SUPABASE ERROR:', error);
+                    throw error; 
+                }
+                
+                console.log('Supabase Success:', data);
+                return { success: true };
+
+            } catch (e) {
+                console.error('Upload Exception:', e);
+                return { success: false, message: e.message || e.error_description || "Unknown error" };
+            }
+        }
+
+        // --- DATABASE FETCH LOGIC (ADMIN) ---
+        async function fetchSupabaseLeaderboard() {
+            try {
+                // Fetch data sorted by Submission Time (Newest First)
+                const { data, error } = await client
+                    .from(SUPABASE_TABLE_NAME)
+                    .select('*')
+                    .order('submission_time', { ascending: false });
+                
+                if (error) throw error;
+                return data;
+            } catch (e) {
+                console.error("Error fetching leaderboard:", e);
+                showTempMessage("Error fetching data: " + e.message, true);
+                return null;
+            }
+        }
+
+        // --- PROCTORING ---
+        function requestFullScreen() {
+            const element = document.documentElement;
+            if (element.requestFullscreen) element.requestFullscreen().catch(e => console.log("Fullscreen denied", e));
+            else if (element.mozRequestFullScreen) element.mozRequestFullScreen();
+            else if (element.webkitRequestFullscreen) element.webkitRequestFullscreen();
+            else if (element.msRequestFullscreen) element.msRequestFullscreen();
+        }
+
+        function exitFullScreen() {
+            if (document.exitFullscreen && document.fullscreenElement) document.exitFullscreen();
+            else if (document.mozCancelFullScreen) document.mozCancelFullScreen();
+            else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
+            else if (document.msExitFullscreen) document.msExitFullscreen();
+        }
+        
+        function showViolationModal(isTerminating) {
+            if (isTerminating) {
+                VIOLATION_MESSAGE.innerHTML = `<p class="text-red-700 font-semibold">FINAL WARNING: ${MAX_VIOLATIONS} violations detected.</p><p>Exam terminated.</p>`;
+                MODAL_CONFIRM_BTN.textContent = 'End Exam';
+                MODAL_CONFIRM_BTN.onclick = () => {
+                    VIOLATION_MODAL.style.display = 'none';
+                    stopTimer();
+                    disableProctoring(); 
+                    exitFullScreen();
+                    calculateAndShowResults(true); 
+                };
+            } else {
+                VIOLATION_MESSAGE.innerHTML = `Do not switch tabs. <span class="font-bold">Total: ${proctoringViolations.total}/${MAX_VIOLATIONS}.</span>`;
+                MODAL_CONFIRM_BTN.textContent = 'Return to Quiz';
+                MODAL_CONFIRM_BTN.onclick = () => {
+                    VIOLATION_MODAL.style.display = 'none';
+                    requestFullScreen(); 
+                };
+            }
+            VIOLATION_MODAL.style.display = 'flex';
+        }
+
+        function handleProctoringViolation(type) {
+            if (currentQuestionIndex >= quizQuestions.length) return; 
+            
+            if (type === 'windowSwitch') {
+                if (violationCooldown) return; 
+                proctoringViolations.windowSwitch++;
+                violationCooldown = true;
+                setTimeout(() => { violationCooldown = false; }, 2000);
+                requestFullScreen(); 
+            } 
+            else if (type === 'copyPaste') proctoringViolations.copyPaste++;
+            else return; 
+            
+            proctoringViolations.total++;
+
+            const vDisplay = document.getElementById('violationCountDisplay');
+            if (vDisplay) vDisplay.innerHTML = `⚠️ Violations: ${proctoringViolations.total} / ${MAX_VIOLATIONS}`;
+
+            if (proctoringViolations.total >= MAX_VIOLATIONS) showViolationModal(true); 
+            else if (type === 'windowSwitch') showViolationModal(false); 
+        }
+        
+        const visibilityChangeHandler = () => { if (document.hidden) handleProctoringViolation('windowSwitch'); };
+        const blurHandler = () => { handleProctoringViolation('windowSwitch'); };
+        const copyCutPasteHandler = (e) => {
+            e.preventDefault();
+            showTempMessage('Content protected.', true); 
+            handleProctoringViolation('copyPaste');
+        };
+
+        function enableProctoring() {
+            document.addEventListener('visibilitychange', visibilityChangeHandler);
+            window.addEventListener('blur', blurHandler);
+            document.addEventListener('copy', copyCutPasteHandler);
+            document.addEventListener('cut', copyCutPasteHandler);
+            document.addEventListener('paste', copyCutPasteHandler);
+        }
+
+        function disableProctoring() {
+            document.removeEventListener('visibilitychange', visibilityChangeHandler);
+            window.removeEventListener('blur', blurHandler);
+            document.removeEventListener('copy', copyCutPasteHandler);
+            document.removeEventListener('cut', copyCutPasteHandler);
+            document.removeEventListener('paste', copyCutPasteHandler);
+        }
+
+        // --- TIMER & LOGIC ---
+        function updateTimerDisplay() {
+            const progressBar = document.getElementById('progressBar');
+            const countdownTimer = document.getElementById('countdownValue'); 
+            if (progressBar) progressBar.style.width = ((timeLeft / TIME_PER_QUESTION) * 100) + '%';
+            if (countdownTimer) countdownTimer.textContent = timeLeft;
+        }
+
+        function startTimer() {
+            stopTimer();
+            timeLeft = TIME_PER_QUESTION;
+            updateTimerDisplay();
+            timerInterval = setInterval(() => {
+                timeLeft--;
+                updateTimerDisplay();
+                if (timeLeft <= 0) {
+                    stopTimer();
+                    studentResponses[currentQuestionIndex] = null;
+                    moveToNextQuestion();
+                }
+            }, 1000);
+        }
+
+        function stopTimer() { clearInterval(timerInterval); }
+
+        function moveToNextQuestion() {
+            currentQuestionIndex++;
+            if (currentQuestionIndex < quizQuestions.length) {
+                renderQuizQuestion();
+                startTimer();
+            } else {
+                stopTimer();
+                disableProctoring();
+                exitFullScreen();
+                calculateAndShowResults(false);
+            }
+        }
+
+        // --- RENDERING VIEWS ---
+
+        function renderSignIn() {
+            APP_CONTAINER.className = "flex items-center justify-center min-h-screen p-4 bg-gray-50";
+            APP_CONTAINER.innerHTML = `
+                <div class="w-full max-w-md bg-white rounded-xl shadow-2xl p-8">
+                    <h2 class="text-3xl font-extrabold text-center text-gray-900 mb-6">Quiz Sign-In</h2>
+                    <form id="signInForm" class="space-y-4">
+                        <div><label class="block text-sm font-medium text-gray-700">Name</label><input type="text" id="studentName" required class="mt-1 block w-full px-4 py-2 border rounded-lg"></div>
+                        <div><label class="block text-sm font-medium text-gray-700">Email</label><input type="email" id="collegeEmail" required class="mt-1 block w-full px-4 py-2 border rounded-lg"></div>
+                        <div><label class="block text-sm font-medium text-gray-700">Admission No.</label><input type="text" id="admissionNo" required class="mt-1 block w-full px-4 py-2 border rounded-lg"></div>
+                        <button type="submit" class="w-full py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 transition mt-6">Start Quiz</button>
+                    </form>
+                </div>`;
+
+            document.getElementById('signInForm').addEventListener('submit', function(e) {
+                e.preventDefault();
+                if (!isQuizActive) { showQuizOffModal(); return; }
+                studentInfo = {
+                    name: document.getElementById('studentName').value.trim(),
+                    email: document.getElementById('collegeEmail').value.trim(),
+                    admissionNo: document.getElementById('admissionNo').value.trim()
+                };
+                requestFullScreen();
+                enableProctoring();
+                setView('quiz');
+            });
+        }
+
+        function renderQuiz() {
+            APP_CONTAINER.className = "flex items-start justify-center min-h-screen p-4 bg-gray-100";
+            APP_CONTAINER.innerHTML = `
+                <div class="w-full max-w-3xl bg-white rounded-2xl shadow-xl p-8 mt-10">
+                    <div id="progressBarContainer"><div id="progressBar"></div></div>
+                    <div id="countdownTimer">Time: <span id="countdownValue">${TIME_PER_QUESTION}</span>s</div> 
+                    <div id="quizContent"></div>
+                </div>`;
+            renderQuizQuestion();
+            startTimer();
+        }
+
+        function renderQuizQuestion() {
+            const q = quizQuestions[currentQuestionIndex];
+            const quizContent = document.getElementById('quizContent');
+            quizContent.innerHTML = `
+                <div class="mb-6"><h3 class="text-xl font-semibold text-gray-800">${q.question}</h3></div>
+                <div class="space-y-4" id="optionsContainer">
+                    ${q.options.map(opt => `
+                        <label class="flex items-center p-4 border rounded-xl cursor-pointer hover:bg-blue-50">
+                            <input type="radio" name="answer" value="${opt}" class="h-5 w-5 text-blue-600" ${studentResponses[currentQuestionIndex] === opt ? 'checked' : ''}>
+                            <span class="ml-4 text-gray-700">${opt}</span>
+                        </label>`).join('')}
+                </div>
+                <div class="flex justify-end mt-8">
+                    <button id="nextButton" class="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700">
+                        ${currentQuestionIndex + 1 === quizQuestions.length ? 'Finish' : 'Next'}
+                    </button>
+                </div>
+                <p id="violationCountDisplay" class="mt-4 text-sm text-right text-gray-500"></p>
+            `;
+
+            document.getElementById('nextButton').onclick = () => {
+                const selected = document.querySelector('input[name="answer"]:checked');
+                studentResponses[currentQuestionIndex] = selected ? selected.value : null;
+                stopTimer();
+                moveToNextQuestion();
+            };
+            
+            document.getElementById('optionsContainer').onchange = (e) => {
+                if (e.target.name === 'answer') studentResponses[currentQuestionIndex] = e.target.value;
+            };
+        }
+
+        // --- RESULTS ---
+        async function calculateAndShowResults(wasTerminated) {
+            LOADING_OVERLAY.style.display = 'flex';
+            let score = 0;
+            quizQuestions.forEach((q, idx) => { if (studentResponses[idx] === q.answer) score++; });
+            const percentageVal = ((score / quizQuestions.length) * 100).toFixed(2);
+
+            const resultData = {
+                name: studentInfo.name, 
+                email: studentInfo.email, 
+                admissionNo: studentInfo.admissionNo, 
+                score, 
+                total: quizQuestions.length,
+                percentage: percentageVal,
+                violations: proctoringViolations.total, 
+                windowSwitchViolations: proctoringViolations.windowSwitch,
+                copyPasteViolations: proctoringViolations.copyPaste
+            };
+
+            // Upload to Supabase
+            const uploadStatus = await uploadResultToSupabase(resultData);
+
+            LOADING_OVERLAY.style.display = 'none';
+            renderFinalScreen(score, wasTerminated, uploadStatus);
+        }
+
+        function renderFinalScreen(score, wasTerminated, uploadStatus) {
+            const statusClass = uploadStatus.success ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700';
+            const statusIcon = uploadStatus.success ? 'fa-check-circle' : 'fa-exclamation-circle';
+            const statusMsg = uploadStatus.success ? 'Saved to Database' : 'Database Upload Failed';
+            const errorDetail = uploadStatus.success ? '' : `<p class="text-xs mt-1 text-red-600 break-all">${uploadStatus.message}</p>`;
+
+            APP_CONTAINER.className = "flex items-center justify-center min-h-screen p-4 bg-gray-50";
+            APP_CONTAINER.innerHTML = `
+                <div class="w-full max-w-lg bg-white rounded-2xl shadow-2xl p-10 text-center">
+                    <div class="inline-flex items-center justify-center w-16 h-16 bg-green-100 rounded-full mb-6">
+                        <i class="fas fa-check-circle text-3xl text-green-600"></i>
+                    </div>
+                    <h2 class="text-3xl font-extrabold text-gray-900 mb-3">${wasTerminated ? 'Terminated' : 'Submitted'}</h2>
+                    
+                    <div class="mb-6 p-3 rounded-lg ${statusClass} inline-block">
+                        <i class="fas ${statusIcon} mr-2"></i> <span class="font-bold">${statusMsg}</span>
+                        ${errorDetail}
+                    </div>
+
+                    <div class="bg-blue-50 p-6 rounded-xl mb-8 text-left">
+                        <div class="flex justify-between mb-2"><span>Score:</span><span class="font-bold">${score} / ${quizQuestions.length}</span></div>
+                        <div class="flex justify-between"><span>Violations:</span><span class="font-bold text-red-600">${proctoringViolations.total}</span></div>
+                    </div>
+
+                    <button onclick="setView('signin')" class="w-full py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700">Return to Sign-In</button>
+                </div>
+            `;
+        }
+
+        // --- ADMIN ---
+        function renderAdminLogin() {
+            APP_CONTAINER.innerHTML = `
+                <div class="w-full max-w-sm bg-white rounded-xl shadow-xl p-8">
+                    <h2 class="text-2xl font-bold text-center mb-6">Admin Login</h2>
+                    <form id="adminLoginForm" class="space-y-4">
+                        <input type="text" id="adminId" placeholder="Admin ID" class="w-full px-4 py-2 border rounded-lg">
+                        <input type="password" id="adminPassword" placeholder="Password" class="w-full px-4 py-2 border rounded-lg">
+                        <button type="submit" class="w-full py-2 bg-red-600 text-white rounded-lg hover:bg-red-700">Login</button>
+                        <button type="button" onclick="setView('signin')" class="w-full py-2 text-gray-600 border rounded-lg hover:bg-gray-50">Cancel</button>
+                    </form>
+                </div>`;
+            
+            document.getElementById('adminLoginForm').onsubmit = (e) => {
+                e.preventDefault();
+                if (document.getElementById('adminId').value === 'admin' && document.getElementById('adminPassword').value === 'admin123') setView('leaderboard');
+                else showTempMessage('Invalid Credentials', true);
+            };
+        }
+
+        // --- ADMIN LEADERBOARD (Using Supabase Data) ---
+        async function renderLeaderboard() {
+            // 1. Render Skeleton first
+            APP_CONTAINER.className = "flex items-start justify-center min-h-screen p-4 bg-gray-100";
+            APP_CONTAINER.innerHTML = `
+                <div class="w-full max-w-6xl bg-white rounded-2xl shadow-xl p-8 mt-10">
+                    <div class="flex justify-between items-center mb-6">
+                        <h2 class="text-2xl font-bold text-gray-900">Global Leaderboard (Supabase)</h2>
+                        <div>
+                            <button id="refreshBtn" class="px-4 py-2 bg-blue-100 text-blue-700 rounded-lg mr-2 hover:bg-blue-200 font-semibold text-sm"><i class="fas fa-sync-alt mr-1"></i> Refresh</button>
+                            <button id="quizToggle" class="px-4 py-2 text-white rounded-lg mr-2 ${isQuizActive ? 'bg-green-600' : 'bg-red-600'} text-sm font-semibold">Quiz: ${isQuizActive?'ON':'OFF'}</button>
+                            <button onclick="setView('signin')" class="px-4 py-2 border rounded-lg text-blue-600 border-blue-600 text-sm font-semibold">Home</button>
+                        </div>
+                    </div>
+                    <div class="overflow-x-auto rounded-lg border shadow-sm">
+                        <table class="min-w-full divide-y divide-gray-200">
+                            <thead class="bg-gray-50">
+                                <tr>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Rank</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Student Details</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Score</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Violations</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Submitted At</th>
+                                </tr>
+                            </thead>
+                            <tbody id="leaderboardBody" class="bg-white divide-y divide-gray-200">
+                                <tr><td colspan="5" class="p-10 text-center text-gray-500"><div class="spinner mx-auto mb-2"></div>Fetching data from database...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>`;
+                
+            // 2. Handle Toggle Button
+            document.getElementById('quizToggle').onclick = () => {
+                isQuizActive = !isQuizActive;
+                localStorage.setItem('isQuizActive', isQuizActive);
+                renderLeaderboard(); // Re-render to update button color/text
+            };
+
+            // 3. Handle Refresh Button
+            document.getElementById('refreshBtn').onclick = renderLeaderboard;
+
+            // 4. Fetch Data from Supabase
+            const data = await fetchSupabaseLeaderboard();
+            const tbody = document.getElementById('leaderboardBody');
+
+            // 5. Render Rows
+            if (!data || data.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="5" class="p-6 text-center text-gray-500">No submissions found in the database.</td></tr>';
+                return;
+            }
+
+            tbody.innerHTML = data.map((entry, i) => {
+                const dateObj = new Date(entry.submission_time);
+                const dateStr = dateObj.toLocaleDateString() + ' ' + dateObj.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+                
+                return `
+                <tr class="${i%2?'bg-gray-50':'bg-white'} hover:bg-gray-100 transition">
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 font-bold">#${i+1}</td>
+                    <td class="px-6 py-4">
+                        <div class="text-sm font-medium text-gray-900">${entry.student_name || 'Unknown'}</div>
+                        <div class="text-xs text-gray-500">${entry.college_email || 'No Email'}</div>
+                        <div class="text-xs text-gray-400">ID: ${entry.admission_no || 'N/A'}</div>
+                    </td>
+                    <td class="px-6 py-4 whitespace-nowrap">
+                        <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-green-100 text-green-800">
+                            ${entry.score} / ${entry.total_questions}
+                        </span>
+                        <div class="text-xs text-gray-500 mt-1">${entry.percentage}%</div>
+                    </td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm">
+                        ${entry.total_violations > 0 
+                            ? `<div class="text-red-600 font-bold mb-1">${entry.total_violations} Violations</div>
+                               <div class="text-xs text-gray-500">Tabs: ${entry.window_switch_violations}</div>
+                               <div class="text-xs text-gray-500">Copy: ${entry.copy_paste_violations}</div>`
+                            : '<span class="text-green-600 font-medium"><i class="fas fa-check-circle mr-1"></i>Clean</span>'}
+                    </td>
+                    <td class="px-6 py-4 whitespace-nowrap text-xs text-gray-500">${dateStr}</td>
+                </tr>`;
+            }).join('');
+        }
+
+        // --- INIT ---
+        document.addEventListener('DOMContentLoaded', () => {
+            setView('signin');
+            ADMIN_BUTTON.onclick = () => setView('admin');
+            
+            const fsHandler = () => {
+                if (!document.fullscreenElement && !document.webkitFullscreenElement && currentQuestionIndex < quizQuestions.length && VIOLATION_MODAL.style.display !== 'flex') {
+                    handleProctoringViolation('windowSwitch'); 
+                }
+            };
+            ['fullscreenchange','webkitfullscreenchange','mozfullscreenchange'].forEach(e => document.addEventListener(e, fsHandler));
+        });
+    </script>
+</body>
+</html>
