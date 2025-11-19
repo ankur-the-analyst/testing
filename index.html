@@ -120,7 +120,6 @@
         let proctoringViolations = { total: 0, windowSwitch: 0, copyPaste: 0 };
         const MAX_VIOLATIONS = 3;
         let violationCooldown = false; 
-        let lastInnerHeight = window.innerHeight; // For mobile resize detection
 
         // DOM Elements
         const APP_CONTAINER = document.getElementById('app');
@@ -245,7 +244,7 @@
             }
         }
 
-        // --- AGGRESSIVE PROCTORING LOGIC ---
+        // --- PROCTORING LOGIC ---
         function requestFullScreen() {
             const element = document.documentElement;
             if (element.requestFullscreen) element.requestFullscreen().catch(e => console.log("Fullscreen denied", e));
@@ -262,8 +261,6 @@
         }
         
         function showViolationModal(isTerminating) {
-            if (VIOLATION_MODAL.style.display === 'flex') return; // Avoid stacking modals
-
             if (isTerminating) {
                 VIOLATION_MESSAGE.innerHTML = `<p class="text-red-700 font-bold mb-2">EXAM TERMINATED</p><p>You exceeded the maximum allowed violations (${MAX_VIOLATIONS}).</p>`;
                 MODAL_CONFIRM_BTN.textContent = 'Submit Exam Now';
@@ -276,9 +273,10 @@
                     calculateAndShowResults(true); 
                 };
             } else {
+                // Explicitly warn about the Notification Panel in the message
                 VIOLATION_MESSAGE.innerHTML = `
-                    <p class="font-bold text-gray-900">⚠️ SUSPICIOUS ACTIVITY</p>
-                    <p class="mt-2">Switched tabs, lost focus, or <span class="font-bold text-red-600">accessed Notification Panel</span>.</p>
+                    <p class="font-bold text-gray-900">⚠️ SUSPICIOUS ACTIVITY DETECTED</p>
+                    <p class="mt-2">You switched tabs, minimized the browser, or <span class="font-bold text-red-600">accessed the Notification Panel</span>.</p>
                     <p class="mt-2 font-bold text-sm">Violation ${proctoringViolations.total}/${MAX_VIOLATIONS}</p>
                 `;
                 MODAL_CONFIRM_BTN.textContent = 'Resume Quiz';
@@ -286,7 +284,6 @@
                 MODAL_CONFIRM_BTN.onclick = () => {
                     VIOLATION_MODAL.style.display = 'none';
                     requestFullScreen(); 
-                    violationCooldown = false; 
                 };
             }
             VIOLATION_MODAL.style.display = 'flex';
@@ -294,55 +291,40 @@
 
         function handleProctoringViolation(type) {
             if (currentQuestionIndex >= quizQuestions.length) return; 
-            if (violationCooldown) return; 
             
+            // This handles Tab Switch AND Notification Panel Pull-down
             if (type === 'windowSwitch') {
+                if (violationCooldown) return; 
+                
+                proctoringViolations.windowSwitch++; // Counts towards tab switch column
                 violationCooldown = true;
-                proctoringViolations.windowSwitch++;
-                proctoringViolations.total++;
-                requestFullScreen(); // Attempt to force back
+                
+                // Cooldown prevents double-counting (e.g. Blur + VisibilityChange happen together)
+                setTimeout(() => { violationCooldown = false; }, 2000);
+                requestFullScreen(); 
             } 
-            else if (type === 'copyPaste') {
-                proctoringViolations.copyPaste++;
-                proctoringViolations.total++;
-            }
+            else if (type === 'copyPaste') proctoringViolations.copyPaste++;
             else return; 
+            
+            proctoringViolations.total++;
 
             const vDisplay = document.getElementById('violationCountDisplay');
             if (vDisplay) vDisplay.innerHTML = `⚠️ Violations: ${proctoringViolations.total} / ${MAX_VIOLATIONS}`;
 
             if (proctoringViolations.total >= MAX_VIOLATIONS) showViolationModal(true); 
-            else showViolationModal(false); 
+            else if (type === 'windowSwitch') showViolationModal(false); 
         }
         
-        // --- AGGRESSIVE EVENT HANDLERS ---
-        
-        // 1. Standard Visibility Change (Tab Switching)
+        // Standard Tab Switch / Minimize detection
         const visibilityChangeHandler = () => { 
             if (document.hidden) handleProctoringViolation('windowSwitch'); 
         };
         
-        // 2. Blur & FocusOut (Catches Notification Panel Pull-Down)
+        // NOTIFICATION PANEL DETECTION
+        // Pulling down the notification shade on mobile triggers 'blur' (loss of focus) 
+        // and often 'focusout'. We listen to both to ensure it catches the action.
         const blurHandler = () => { 
-            // Immediate triggering on blur
             handleProctoringViolation('windowSwitch'); 
-        };
-
-        // 3. Resize Detection (Catches keyboard popping up or Status Bar changes on mobile)
-        const resizeHandler = () => {
-            // On mobile, pulling down the notification bar sometimes resizes the inner height slightly
-            // or if they try to use split screen.
-            const newHeight = window.innerHeight;
-            const heightDiff = Math.abs(newHeight - lastInnerHeight);
-            
-            // If height changes significantly (but not just a small browser chrome adjustment)
-            // We ignore keyboard opens usually, but strict mode might want to flag it.
-            // Here we flag unexpected resizes.
-            if (heightDiff > 100 && !document.fullscreenElement) {
-                 // This helps detect if they exited fullscreen to access other apps
-                 handleProctoringViolation('windowSwitch');
-            }
-            lastInnerHeight = newHeight;
         };
         
         const copyCutPasteHandler = (e) => {
@@ -353,27 +335,23 @@
 
         function enableProctoring() {
             document.addEventListener('visibilitychange', visibilityChangeHandler);
-            window.addEventListener('blur', blurHandler);       // Standard blur
-            window.addEventListener('focusout', blurHandler);   // Additional Aggressive Check
-            window.addEventListener('resize', resizeHandler);   // Detect screen size changes
+            
+            // These two events catch the Notification Panel pull-down on Mobile
+            window.addEventListener('blur', blurHandler); 
+            window.addEventListener('focusout', blurHandler); 
             
             document.addEventListener('copy', copyCutPasteHandler);
             document.addEventListener('cut', copyCutPasteHandler);
             document.addEventListener('paste', copyCutPasteHandler);
-            
-            // Prevent Right Click
-            document.addEventListener('contextmenu', event => event.preventDefault());
         }
 
         function disableProctoring() {
             document.removeEventListener('visibilitychange', visibilityChangeHandler);
             window.removeEventListener('blur', blurHandler);
             window.removeEventListener('focusout', blurHandler);
-            window.removeEventListener('resize', resizeHandler);
             document.removeEventListener('copy', copyCutPasteHandler);
             document.removeEventListener('cut', copyCutPasteHandler);
             document.removeEventListener('paste', copyCutPasteHandler);
-            document.removeEventListener('contextmenu', event => event.preventDefault());
         }
 
         // --- TIMER & LOGIC ---
@@ -423,13 +401,13 @@
                     <h2 class="text-3xl font-extrabold text-center text-gray-900 mb-6">Quiz Sign-In</h2>
                     
                     <div class="mobile-warning">
-                        <p class="font-bold"><i class="fas fa-mobile-alt mr-2"></i>Strict Mode Warning:</p>
+                        <p class="font-bold"><i class="fas fa-mobile-alt mr-2"></i>Mobile Users Warning:</p>
                         <ul class="list-disc ml-5 mt-2 space-y-1">
-                            <li><strong>Do NOT touch the notification panel.</strong></li>
-                            <li>Do NOT pull down the status bar.</li>
-                            <li>Incoming calls will terminate the exam.</li>
+                            <li>Do NOT pull down the <strong>Notification Panel</strong>.</li>
+                            <li>Do NOT answer incoming calls.</li>
+                            <li>Do NOT switch apps.</li>
                         </ul>
-                        <p class="mt-2 text-red-600 font-bold text-xs text-center">ANY INTERACTION OUTSIDE THE QUIZ AREA IS A VIOLATION.</p>
+                        <p class="mt-2 text-red-600 font-bold text-xs text-center">ANY OF THESE ACTIONS WILL COUNT AS A TAB SWITCH VIOLATION.</p>
                     </div>
 
                     <form id="signInForm" class="space-y-4">
@@ -665,6 +643,7 @@
             setView('signin');
             ADMIN_BUTTON.onclick = () => setView('admin');
             QUIZ_OFF_CONFIRM_BTN.onclick = () => { QUIZ_OFF_MODAL.style.display = 'none'; };
+            
             const fsHandler = () => {
                 if (!document.fullscreenElement && !document.webkitFullscreenElement && currentQuestionIndex < quizQuestions.length && VIOLATION_MODAL.style.display !== 'flex') {
                     handleProctoringViolation('windowSwitch'); 
