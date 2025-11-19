@@ -9,7 +9,7 @@
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <style>
         #app { min-height: 100vh; }
-        #adminButton { position: fixed; top: 10px; right: 10px; z-index: 100; }
+        
         #progressBarContainer { position: relative; height: 8px; background-color: #e5e7eb; border-radius: 4px; overflow: hidden; margin-bottom: 10px; }
         #progressBar { height: 100%; width: 100%; background-color: #ef4444; transition: width 1s linear; }
         #countdownTimer { font-size: 1.25rem; font-weight: 700; color: #ef4444; text-align: right; margin-bottom: 10px; }
@@ -39,7 +39,7 @@
         }
     </style>
 </head>
-<body class="bg-gray-50">
+<body class="bg-gray-50 select-none">
 
     <div id="loadingOverlay">
         <div class="spinner"></div>
@@ -47,18 +47,14 @@
         <p class="text-gray-500">Syncing with Database...</p>
     </div>
 
-    <button id="adminButton" class="bg-red-500 hover:bg-red-600 text-white font-semibold py-2 px-4 rounded-lg shadow-lg transition duration-150 ease-in-out text-sm">
-        <i class="fas fa-lock mr-2"></i>Admin Panel
-    </button>
-
     <div id="app" class="flex items-center justify-center p-4"></div>
 
-    <div id="violationModal" class="fixed inset-0 bg-black bg-opacity-80 hidden items-center justify-center z-50 transition-opacity duration-300">
-        <div class="bg-white rounded-xl shadow-2xl max-w-sm w-full p-6 text-center">
-            <i class="fas fa-exclamation-triangle text-4xl text-red-500 mb-4"></i>
-            <h3 class="text-xl font-bold text-gray-900 mb-3">Access Denied!</h3>
-            <p id="violationMessage" class="text-gray-600 mb-6 text-sm"></p>
-            <button id="modalConfirmBtn" class="w-full py-2 px-4 rounded-lg text-white font-semibold bg-red-600 hover:bg-red-700 transition">I Understand</button>
+    <div id="violationModal" class="fixed inset-0 bg-black bg-opacity-90 hidden items-center justify-center z-50 transition-opacity duration-300">
+        <div class="bg-white rounded-xl shadow-2xl max-w-sm w-full p-6 text-center border-4 border-red-500">
+            <i class="fas fa-hand-paper text-4xl text-red-600 mb-4"></i>
+            <h3 class="text-xl font-bold text-gray-900 mb-3">Violation Detected!</h3>
+            <p id="violationMessage" class="text-gray-800 mb-6 text-sm font-medium"></p>
+            <button id="modalConfirmBtn" class="w-full py-3 px-4 rounded-lg text-white font-bold bg-red-600 hover:bg-red-700 transition uppercase tracking-wide">I Understand</button>
         </div>
     </div>
     
@@ -116,14 +112,19 @@
         let timeLeft = TIME_PER_QUESTION;
         let isQuizActive = localStorage.getItem('isQuizActive') === 'false' ? false : true; 
         
-        // Violations
+        // Violations - Extension violations are now merged into windowSwitch
         let proctoringViolations = { total: 0, windowSwitch: 0, copyPaste: 0 };
         const MAX_VIOLATIONS = 3;
+        const WINDOW_SWITCH_COOLDOWN = 1000; // 1 second
         let violationCooldown = false; 
+        let extensionCheckInterval; 
+        
+        // **Universal Edge Thresholds**
+        const EDGE_THRESHOLD = 50; 
+        const TOP_EDGE_THRESHOLD = 50; 
 
         // DOM Elements
         const APP_CONTAINER = document.getElementById('app');
-        const ADMIN_BUTTON = document.getElementById('adminButton');
         const VIOLATION_MODAL = document.getElementById('violationModal');
         const MODAL_CONFIRM_BTN = document.getElementById('modalConfirmBtn');
         const VIOLATION_MESSAGE = document.getElementById('violationMessage');
@@ -159,7 +160,6 @@
             const signInForm = document.getElementById('signInForm');
             if(signInForm) signInForm.style.display = 'block'; 
 
-            ADMIN_BUTTON.style.display = (viewName === 'quiz') ? 'none' : 'block';
             APP_CONTAINER.innerHTML = '';
 
             if (viewName === 'signin') renderSignIn();
@@ -204,7 +204,9 @@
                 name, email, admissionNo, score, total: totalQuestions,
                 percentage: percentageVal,
                 violations: violations.total, 
-                windowSwitchViolations: violations.windowSwitch,
+                // Extension and Swipe violations are logged under windowSwitchViolations
+                windowSwitchViolations: violations.windowSwitch, 
+                // Copy, Paste, Cut, and Screenshot violations are logged under copyPasteViolations
                 copyPasteViolations: violations.copyPaste,
                 timestamp: new Date().toLocaleString()
             };
@@ -224,7 +226,7 @@
                 total_questions: resultData.total,
                 percentage: resultData.percentage.toString(), 
                 total_violations: resultData.violations,
-                window_switch_violations: resultData.windowSwitchViolations,
+                window_switch_violations: resultData.windowSwitchViolations, 
                 copy_paste_violations: resultData.copyPasteViolations,
                 submission_time: new Date().toISOString(),
                 student_name: resultData.name,
@@ -247,7 +249,12 @@
         // --- PROCTORING LOGIC ---
         function requestFullScreen() {
             const element = document.documentElement;
-            if (element.requestFullscreen) element.requestFullscreen().catch(e => console.log("Fullscreen denied", e));
+            if (element.requestFullscreen) {
+                element.requestFullscreen().catch(e => {
+                    console.error("Fullscreen Request Failed on user click:", e);
+                    showTempMessage('Browser blocked automatic Full Screen. Please click the full screen icon manually.', true);
+                });
+            }
             else if (element.mozRequestFullScreen) element.mozRequestFullScreen();
             else if (element.webkitRequestFullscreen) element.webkitRequestFullscreen();
             else if (element.msRequestFullscreen) element.msRequestFullscreen();
@@ -260,11 +267,11 @@
             else if (document.msExitFullscreen) document.msExitFullscreen();
         }
         
-        function showViolationModal(isTerminating) {
+        function showViolationModal(isTerminating, reason) {
             if (isTerminating) {
-                VIOLATION_MESSAGE.innerHTML = `<p class="text-red-700 font-bold mb-2">EXAM TERMINATED</p><p>You exceeded the maximum allowed violations (${MAX_VIOLATIONS}).</p>`;
+                VIOLATION_MESSAGE.innerHTML = `<p class="text-red-700 font-bold mb-2 text-lg">EXAM TERMINATED</p><p>You exceeded the limit of ${MAX_VIOLATIONS} violations.</p>`;
                 MODAL_CONFIRM_BTN.textContent = 'Submit Exam Now';
-                MODAL_CONFIRM_BTN.className = "w-full py-2 px-4 rounded-lg text-white font-semibold bg-red-600 hover:bg-red-700 transition";
+                MODAL_CONFIRM_BTN.className = "w-full py-3 px-4 rounded-lg text-white font-bold bg-red-700 hover:bg-red-800 transition shadow-lg";
                 MODAL_CONFIRM_BTN.onclick = () => {
                     VIOLATION_MODAL.style.display = 'none';
                     stopTimer();
@@ -273,35 +280,56 @@
                     calculateAndShowResults(true); 
                 };
             } else {
-                // Explicitly warn about the Notification Panel in the message
+                // *** FIX: Pause the extension check interval to prevent repeated modal triggers ***
+                clearInterval(extensionCheckInterval); 
+                
+                // Specific messages based on violation type
+                let detailMsg = "Suspicious activity detected.";
+                if (reason === 'swipedown') detailMsg = "Do not swipe from the **top edge** (Notification Panel).";
+                else if (reason === 'swipeleft' || reason === 'swiperight') detailMsg = "Do not swipe from the **side edges** (Browser Navigation).";
+                else if (reason === 'swipeup') detailMsg = "Do not swipe from the **bottom edge** (Control Center/Home Bar).";
+                else if (reason === 'blur') detailMsg = "Do not switch apps, minimize the browser, or lose focus.";
+                else if (reason === 'copypaste') detailMsg = "Copy/Paste is strictly prohibited.";
+                else if (reason === 'screenshot') detailMsg = "Unauthorized **screenshot attempt** detected."; 
+                else if (reason === 'extension') detailMsg = "Unauthorized **browser extension interference** detected.";
+
                 VIOLATION_MESSAGE.innerHTML = `
-                    <p class="font-bold text-gray-900">⚠️ SUSPICIOUS ACTIVITY DETECTED</p>
-                    <p class="mt-2">You switched tabs, minimized the browser, or <span class="font-bold text-red-600">accessed the Notification Panel</span>.</p>
-                    <p class="mt-2 font-bold text-sm">Violation ${proctoringViolations.total}/${MAX_VIOLATIONS}</p>
+                    <p class="text-lg font-bold text-gray-800 mb-2">⚠️ ${detailMsg}</p>
+                    <p class="text-sm text-gray-600">This incident has been recorded.</p>
+                    <div class="mt-4 p-2 bg-red-50 rounded border border-red-100">
+                        <p class="font-bold text-red-600">Violation ${proctoringViolations.total} of ${MAX_VIOLATIONS}</p>
+                    </div>
                 `;
-                MODAL_CONFIRM_BTN.textContent = 'Resume Quiz';
-                MODAL_CONFIRM_BTN.className = "w-full py-2 px-4 rounded-lg text-white font-semibold bg-yellow-600 hover:bg-yellow-700 transition";
+                // Resume Quiz button is tied directly to requestFullScreen, ensuring it's a user gesture.
+                MODAL_CONFIRM_BTN.textContent = 'Resume Quiz (Enable Full Screen)';
+                MODAL_CONFIRM_BTN.className = "w-full py-3 px-4 rounded-lg text-white font-bold bg-yellow-600 hover:bg-yellow-700 transition shadow-md";
                 MODAL_CONFIRM_BTN.onclick = () => {
                     VIOLATION_MODAL.style.display = 'none';
-                    requestFullScreen(); 
+                    
+                    // *** FIX: Resume the extension check interval on button click ***
+                    detectSpecificExtensionFootprints(); 
+                    extensionCheckInterval = setInterval(detectSpecificExtensionFootprints, 5000); 
+                    
+                    requestFullScreen(); // THIS MUST BE THE ONLY FULLSCREEN CALL TIED TO A CLICK
                 };
             }
             VIOLATION_MODAL.style.display = 'flex';
         }
 
-        function handleProctoringViolation(type) {
+        function handleProctoringViolation(type, reason) {
             if (currentQuestionIndex >= quizQuestions.length) return; 
             
             if (type === 'windowSwitch') {
                 if (violationCooldown) return; 
                 
-                proctoringViolations.windowSwitch++; // Counts towards tab switch column
+                proctoringViolations.windowSwitch++; 
                 violationCooldown = true;
                 
-                setTimeout(() => { violationCooldown = false; }, 2000);
-                requestFullScreen(); 
+                setTimeout(() => { violationCooldown = false; }, WINDOW_SWITCH_COOLDOWN); 
             } 
-            else if (type === 'copyPaste') proctoringViolations.copyPaste++;
+            else if (type === 'copyPaste') {
+                proctoringViolations.copyPaste++;
+            }
             else return; 
             
             proctoringViolations.total++;
@@ -309,49 +337,105 @@
             const vDisplay = document.getElementById('violationCountDisplay');
             if (vDisplay) vDisplay.innerHTML = `⚠️ Violations: ${proctoringViolations.total} / ${MAX_VIOLATIONS}`;
 
-            if (proctoringViolations.total >= MAX_VIOLATIONS) showViolationModal(true); 
-            else if (type === 'windowSwitch') showViolationModal(false); 
+            if (proctoringViolations.total >= MAX_VIOLATIONS) showViolationModal(true, reason); 
+            // Only 'windowSwitch' type (which now includes extension events) triggers the non-terminating modal.
+            else if (type === 'windowSwitch') showViolationModal(false, reason); 
         }
         
-        // 1. APP SWITCH / MINIMIZE (Robust)
+        // --- Extension Detection Logic (Indirect/Experimental) ---
+        function detectSpecificExtensionFootprints() {
+            if (currentQuestionIndex >= quizQuestions.length || violationCooldown) return;
+
+            // Check 1: Known injected global properties from common extensions (e.g., ad-blockers, tools)
+            if (window.Stranalytics || window.adblocker || window.betterTranslate || window.__REACT_DEVTOOLS_GLOBAL_HOOK__) {
+                // Log as a windowSwitch type violation with reason 'extension'
+                handleProctoringViolation('windowSwitch', 'extension'); 
+                return;
+            }
+
+            // Check 2: Check for existence of Chrome/Firefox extension APIs outside of a secure context.
+            if (window.chrome && window.chrome.runtime) {
+                // Log as a windowSwitch type violation with reason 'extension'
+                handleProctoringViolation('windowSwitch', 'extension');
+                return;
+            }
+        }
+        
         const visibilityChangeHandler = () => { 
-            if (document.hidden) handleProctoringViolation('windowSwitch'); 
+            if (document.hidden) handleProctoringViolation('windowSwitch', 'blur'); 
         };
         
-        // 2. NOTIFICATION PANEL / OVERLAY DETECTION
         const blurHandler = () => { 
-            // FIX: We check if document explicitly lost focus. 
-            // IMPORTANT: We removed 'focusout' listener which was causing the bug on clicks.
-            // Window blur usually means the USER left the window context (e.g. clicked URL bar, pulled notification shade).
             if(violationCooldown) return;
-            handleProctoringViolation('windowSwitch'); 
+            handleProctoringViolation('windowSwitch', 'blur'); 
+        };
+
+        // 3. EDGE SWIPE DETECTION (TOUCH)
+        const touchStartHandler = (e) => {
+            if (currentQuestionIndex >= quizQuestions.length) return; 
+
+            if(e.touches && e.touches.length > 0) {
+                const touchX = e.touches[0].clientX;
+                const touchY = e.touches[0].clientY;
+                const screenWidth = window.innerWidth;
+                const screenHeight = window.innerHeight;
+                let reason = null;
+
+                if(touchY < TOP_EDGE_THRESHOLD) reason = 'swipedown';
+                else if(touchX < EDGE_THRESHOLD) reason = 'swipeleft';
+                else if(touchX > screenWidth - EDGE_THRESHOLD) reason = 'swiperight';
+                else if(touchY > screenHeight - EDGE_THRESHOLD) reason = 'swipeup';
+                
+                if (reason) {
+                    e.preventDefault(); 
+                    handleProctoringViolation('windowSwitch', reason);
+                }
+            }
         };
         
-        // 3. COPY PASTE PROTECTION
         const copyCutPasteHandler = (e) => {
             e.preventDefault();
             showTempMessage('Content protected.', true); 
-            handleProctoringViolation('copyPaste');
+            handleProctoringViolation('copyPaste', 'copypaste');
+        };
+
+        // 4. SCREENSHOT KEY DETECTION (PrintScreen)
+        const screenshotKeyHandler = (e) => {
+            // Key codes for PrintScreen: 44 (standard, works cross-browser), 'PrintScreen' key name.
+            if (e.key === 'PrintScreen' || e.keyCode === 44) {
+                e.preventDefault(); // Stop the default screenshot action
+                showTempMessage('Screenshot attempt detected.', true); 
+                handleProctoringViolation('copyPaste', 'screenshot');
+            } 
         };
 
         function enableProctoring() {
             document.addEventListener('visibilitychange', visibilityChangeHandler);
-            
-            // FIX: REMOVED 'focusout' listener. Kept only 'blur' on window.
-            // 'focusout' bubbles from elements (clicks), 'blur' on window does not bubble from elements in most contexts.
             window.addEventListener('blur', blurHandler); 
+            
+            document.addEventListener('touchstart', touchStartHandler, { passive: false });
             
             document.addEventListener('copy', copyCutPasteHandler);
             document.addEventListener('cut', copyCutPasteHandler);
             document.addEventListener('paste', copyCutPasteHandler);
+            document.addEventListener('contextmenu', event => event.preventDefault());
+            
+            document.addEventListener('keydown', screenshotKeyHandler); 
+
+            // Start periodic extension check
+            detectSpecificExtensionFootprints(); 
+            extensionCheckInterval = setInterval(detectSpecificExtensionFootprints, 5000); // Check every 5 seconds
         }
 
         function disableProctoring() {
+            clearInterval(extensionCheckInterval); // Stop extension check
             document.removeEventListener('visibilitychange', visibilityChangeHandler);
             window.removeEventListener('blur', blurHandler);
+            document.removeEventListener('touchstart', touchStartHandler);
             document.removeEventListener('copy', copyCutPasteHandler);
             document.removeEventListener('cut', copyCutPasteHandler);
             document.removeEventListener('paste', copyCutPasteHandler);
+            document.removeEventListener('keydown', screenshotKeyHandler); 
         }
 
         // --- TIMER & LOGIC ---
@@ -401,20 +485,25 @@
                     <h2 class="text-3xl font-extrabold text-center text-gray-900 mb-6">Quiz Sign-In</h2>
                     
                     <div class="mobile-warning">
-                        <p class="font-bold"><i class="fas fa-mobile-alt mr-2"></i>Mobile Users Warning:</p>
-                        <ul class="list-disc ml-5 mt-2 space-y-1">
-                            <li>Do NOT pull down the <strong>Notification Panel</strong>.</li>
-                            <li>Do NOT answer incoming calls.</li>
-                            <li>Do NOT switch apps.</li>
+                        <p class="font-bold text-red-800"><i class="fas fa-ban mr-2"></i>PROCTORING RULES:</p>
+                        <ul class="list-disc ml-5 mt-2 space-y-2 text-sm text-red-900 font-medium">
+                            <li>**STRICTLY NO BROWSER EXTENSIONS (AI, screen readers, VPNs, etc.).**</li>
+                            <li>Do NOT touch ANY edge of the screen (no side/top/bottom swipes).</li>
+                            <li>Do NOT switch apps, minimize the browser, or lose focus.</li>
+                            <li>Do NOT attempt to **Copy, Paste, or Screenshot** the quiz content.</li>
                         </ul>
-                        <p class="mt-2 text-red-600 font-bold text-xs text-center">ANY OF THESE ACTIONS WILL COUNT AS A TAB SWITCH VIOLATION.</p>
+                        <p class="mt-4 p-2 bg-red-100 border border-red-200 rounded text-xs text-center font-bold text-red-700">All forms of interference are logged and will lead to immediate exam termination after ${MAX_VIOLATIONS} warnings.</p>
                     </div>
 
-                    <form id="signInForm" class="space-y-4">
+                    <form id="signInForm" class="space-y-4 mt-6">
                         <div><label class="block text-sm font-medium text-gray-700">Name</label><input type="text" id="studentName" required class="mt-1 block w-full px-4 py-2 border rounded-lg"></div>
                         <div><label class="block text-sm font-medium text-gray-700">Email</label><input type="email" id="collegeEmail" required class="mt-1 block w-full px-4 py-2 border rounded-lg"></div>
                         <div><label class="block text-sm font-medium text-gray-700">Admission No.</label><input type="text" id="admissionNo" required class="mt-1 block w-full px-4 py-2 border rounded-lg"></div>
-                        <button type="submit" class="w-full py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 transition mt-6">Start Quiz</button>
+                        <button type="submit" class="w-full py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 transition mt-6 shadow-lg font-bold">Start Quiz</button>
+                        
+                        <button type="button" id="adminSignInButton" class="w-full py-3 bg-gray-500 text-white rounded-lg hover:bg-gray-600 transition font-bold mt-2">
+                            <i class="fas fa-lock mr-2"></i>Admin Panel
+                        </button>
                     </form>
                 </div>`;
 
@@ -435,12 +524,16 @@
                 enableProctoring();
                 setView('quiz');
             });
+            
+            document.getElementById('adminSignInButton').onclick = () => setView('admin');
         }
 
         function renderQuiz() {
             APP_CONTAINER.className = "flex items-start justify-center min-h-screen p-4 bg-gray-100";
             APP_CONTAINER.innerHTML = `
-                <div class="w-full max-w-3xl bg-white rounded-2xl shadow-xl p-8 mt-10">
+                <div class="w-full max-w-3xl bg-white rounded-2xl shadow-xl p-8 mt-10 relative">
+                     <div class="h-4 w-full mb-4 border-b border-gray-100"></div>
+                    
                     <div id="progressBarContainer"><div id="progressBar"></div></div>
                     <div id="countdownTimer">Time: <span id="countdownValue">${TIME_PER_QUESTION}</span>s</div> 
                     <div id="quizContent"></div>
@@ -456,20 +549,21 @@
                 <div class="mb-6"><h3 class="text-xl font-semibold text-gray-800">${q.question}</h3></div>
                 <div class="space-y-4" id="optionsContainer">
                     ${q.options.map(opt => `
-                        <label class="flex items-center p-4 border rounded-xl cursor-pointer hover:bg-blue-50">
+                        <label class="flex items-center p-4 border rounded-xl cursor-pointer hover:bg-blue-50 transition">
                             <input type="radio" name="answer" value="${opt}" class="h-5 w-5 text-blue-600" ${studentResponses[currentQuestionIndex] === opt ? 'checked' : ''}>
-                            <span class="ml-4 text-gray-700">${opt}</span>
+                            <span class="ml-4 text-gray-700 select-none">${opt}</span>
                         </label>`).join('')}
                 </div>
                 <div class="flex justify-end mt-8">
-                    <button id="nextButton" class="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700">
+                    <button id="nextButton" class="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 shadow-md font-semibold">
                         ${currentQuestionIndex + 1 === quizQuestions.length ? 'Finish' : 'Next'}
                     </button>
                 </div>
-                <p id="violationCountDisplay" class="mt-4 text-sm text-right text-gray-500"></p>
+                <p id="violationCountDisplay" class="mt-4 text-sm text-right text-gray-500 font-mono"></p>
             `;
 
-            document.getElementById('nextButton').onclick = () => {
+            document.getElementById('nextButton').onclick = (e) => {
+                e.stopPropagation();
                 const selected = document.querySelector('input[name="answer"]:checked');
                 studentResponses[currentQuestionIndex] = selected ? selected.value : null;
                 stopTimer();
@@ -503,8 +597,13 @@
                     <div class="inline-flex items-center justify-center w-16 h-16 bg-green-100 rounded-full mb-6">
                         <i class="fas fa-check-circle text-3xl text-green-600"></i>
                     </div>
-                    <h2 class="text-3xl font-extrabold text-gray-900 mb-3">${wasTerminated ? 'Terminated' : 'Submitted'}</h2>
+                    <h2 class="text-3xl font-extrabold text-gray-900 mb-3">${wasTerminated ? 'Exam Terminated' : 'Quiz Submitted'}</h2>
                     
+                    <div class="bg-gray-50 p-4 rounded-lg mb-6 border border-gray-200">
+                        <p class="text-xl font-bold text-gray-900">${studentInfo.name}</p>
+                        <p class="text-sm text-gray-500 mt-1">Admission No: <span class="font-mono text-gray-700 font-semibold">${studentInfo.admissionNo}</span></p>
+                    </div>
+
                     <div class="mb-6 p-3 rounded-lg ${statusClass} inline-block w-full">
                         <div class="flex items-center justify-center">
                             <i class="fas ${statusIcon} mr-2"></i> <span class="font-bold">${statusMsg}</span>
@@ -514,7 +613,12 @@
 
                     <div class="bg-blue-50 p-6 rounded-xl mb-8 text-left">
                         <div class="flex justify-between mb-2"><span>Score:</span><span class="font-bold">${score} / ${quizQuestions.length}</span></div>
-                        <div class="flex justify-between"><span>Violations:</span><span class="font-bold text-red-600">${proctoringViolations.total}</span></div>
+                        
+                        <div class="border-t border-blue-100 pt-3 mt-3">
+                            <div class="flex justify-between mb-1"><span class="font-bold">Total Violations Recorded:</span><span class="font-bold text-red-600">${proctoringViolations.total}</span></div>
+                            <div class="flex justify-between text-sm text-gray-700"><span>(Window Switch / Extension / Focus Loss):</span><span class="font-bold">${proctoringViolations.windowSwitch} incidents</span></div>
+                            <div class="flex justify-between text-sm text-gray-700"><span>(Copy/Paste / Screenshot Attempt):</span><span class="font-bold">${proctoringViolations.copyPaste} incidents</span></div>
+                        </div>
                     </div>
 
                     <button onclick="setView('signin')" class="w-full py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700">Return to Sign-In</button>
@@ -641,12 +745,12 @@
         // --- INIT ---
         document.addEventListener('DOMContentLoaded', () => {
             setView('signin');
-            ADMIN_BUTTON.onclick = () => setView('admin');
             QUIZ_OFF_CONFIRM_BTN.onclick = () => { QUIZ_OFF_MODAL.style.display = 'none'; };
             
             const fsHandler = () => {
+                // If exiting fullscreen while quiz is active and modal is not showing, trigger a violation.
                 if (!document.fullscreenElement && !document.webkitFullscreenElement && currentQuestionIndex < quizQuestions.length && VIOLATION_MODAL.style.display !== 'flex') {
-                    handleProctoringViolation('windowSwitch'); 
+                    handleProctoringViolation('windowSwitch', 'blur'); 
                 }
             };
             ['fullscreenchange','webkitfullscreenchange','mozfullscreenchange'].forEach(e => document.addEventListener(e, fsHandler));
