@@ -6,7 +6,6 @@
     <title>Proctored Business & Finance Quiz</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
-    <!-- Supabase JS Library -->
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <style>
         #app { min-height: 100vh; }
@@ -17,7 +16,7 @@
         
         /* Loading Overlay */
         #loadingOverlay {
-            position: fixed; inset: 0; background: rgba(255,255,255,0.9); 
+            position: fixed; inset: 0; background: rgba(255,255,255,0.95); 
             z-index: 9999; display: none; flex-direction: column; 
             align-items: center; justify-content: center;
         }
@@ -31,11 +30,10 @@
 </head>
 <body class="bg-gray-50">
 
-    <!-- Loading Overlay for Data Submission -->
     <div id="loadingOverlay">
         <div class="spinner"></div>
         <h2 class="text-xl font-bold text-gray-800">Processing...</h2>
-        <p class="text-gray-500">Please wait.</p>
+        <p class="text-gray-500">Syncing with Database...</p>
     </div>
 
     <button id="adminButton" class="bg-red-500 hover:bg-red-600 text-white font-semibold py-2 px-4 rounded-lg shadow-lg transition duration-150 ease-in-out text-sm">
@@ -44,7 +42,6 @@
 
     <div id="app" class="flex items-center justify-center p-4"></div>
 
-    <!-- Violation Modal -->
     <div id="violationModal" class="fixed inset-0 bg-black bg-opacity-70 hidden items-center justify-center z-50 transition-opacity duration-300">
         <div class="bg-white rounded-xl shadow-2xl max-w-sm w-full p-6 text-center">
             <i class="fas fa-exclamation-triangle text-4xl text-yellow-500 mb-4"></i>
@@ -54,13 +51,12 @@
         </div>
     </div>
     
-    <!-- Quiz Off Modal -->
     <div id="quizOffModal" class="fixed inset-0 bg-black bg-opacity-70 hidden items-center justify-center z-50 transition-opacity duration-300">
         <div class="bg-white rounded-xl shadow-2xl max-w-sm w-full p-6 text-center">
-            <i class="fas fa-pause-circle text-4xl text-blue-500 mb-4"></i>
-            <h3 class="text-xl font-bold text-gray-900 mb-3">Quiz is Currently Unavailable</h3>
-            <p id="quizOffMessage" class="text-gray-600 mb-6 text-sm">The examination is currently paused by the administrator.</p>
-            <button id="quizOffConfirmBtn" class="w-full py-2 px-4 rounded-lg text-white font-semibold bg-blue-600 hover:bg-blue-700 transition">Close</button>
+            <i class="fas fa-clock text-4xl text-blue-500 mb-4"></i>
+            <h3 class="text-xl font-bold text-gray-900 mb-3">Quiz Unavailable</h3>
+            <p id="quizOffMessage" class="text-gray-600 mb-6 text-base font-medium">The administrator has not started the quiz yet. Please wait.</p>
+            <button id="quizOffConfirmBtn" class="w-full py-2 px-4 rounded-lg text-white font-semibold bg-blue-600 hover:bg-blue-700 transition">Okay, I will wait</button>
         </div>
     </div>
     
@@ -150,9 +146,17 @@
 
             if (viewName === 'signin') renderSignIn();
             else if (viewName === 'quiz') renderQuiz();
-            // Results is handled by calculateAndShowResults directly
             else if (viewName === 'admin') renderAdminLogin();
-            else if (viewName === 'leaderboard') renderLeaderboard();
+            else if (viewName === 'leaderboard') renderLeaderboard(); 
+        }
+
+        // --- NEW FUNCTION: Show Quiz Off Modal ---
+        function showQuizOffModal() {
+            const msg = document.getElementById('quizOffMessage');
+            if (msg) {
+                msg.innerHTML = "The administrator has <strong class='text-red-500'>NOT started</strong> the quiz yet.<br><br>Please wait for further instructions.";
+            }
+            QUIZ_OFF_MODAL.style.display = 'flex';
         }
 
         function showTempMessage(msg, isError = false) {
@@ -167,6 +171,30 @@
             tempDiv.textContent = msg;
             tempDiv.style.opacity = '1';
             setTimeout(() => { tempDiv.style.opacity = '0'; }, 4000);
+        }
+
+        function getLeaderboard() {
+            try {
+                const data = localStorage.getItem('quizLeaderboard');
+                return data ? JSON.parse(data) : [];
+            } catch (e) { return []; }
+        }
+
+        function saveResultLocally(name, email, admissionNo, score, totalQuestions, violations) {
+            const leaderboard = getLeaderboard();
+            const percentageVal = ((score / totalQuestions) * 100).toFixed(2);
+            const result = {
+                name, email, admissionNo, score, total: totalQuestions,
+                percentage: percentageVal,
+                violations: violations.total, 
+                windowSwitchViolations: violations.windowSwitch,
+                copyPasteViolations: violations.copyPaste,
+                timestamp: new Date().toLocaleString()
+            };
+            leaderboard.push(result);
+            leaderboard.sort((a, b) => b.score - a.score || new Date(a.timestamp) - new Date(b.timestamp));
+            localStorage.setItem('quizLeaderboard', JSON.stringify(leaderboard));
+            return result; 
         }
 
         // --- DATABASE UPLOAD LOGIC ---
@@ -188,8 +216,6 @@
                 admission_no: resultData.admissionNo,
             };
 
-            console.log("Submitting to Supabase:", dataToInsert);
-
             try {
                 const { data, error } = await client
                     .from(SUPABASE_TABLE_NAME)
@@ -200,31 +226,14 @@
                     console.error('SUPABASE ERROR:', error);
                     throw error; 
                 }
-                
-                console.log('Supabase Success:', data);
                 return { success: true };
 
             } catch (e) {
                 console.error('Upload Exception:', e);
-                return { success: false, message: e.message || e.error_description || "Unknown error" };
-            }
-        }
-
-        // --- DATABASE FETCH LOGIC (ADMIN) ---
-        async function fetchSupabaseLeaderboard() {
-            try {
-                // Fetch data sorted by Submission Time (Newest First)
-                const { data, error } = await client
-                    .from(SUPABASE_TABLE_NAME)
-                    .select('*')
-                    .order('submission_time', { ascending: false });
-                
-                if (error) throw error;
-                return data;
-            } catch (e) {
-                console.error("Error fetching leaderboard:", e);
-                showTempMessage("Error fetching data: " + e.message, true);
-                return null;
+                if(e.message && e.message.includes("row-level security")) {
+                    return { success: false, message: "DATABASE PERMISSION ERROR: Check RLS policies." };
+                }
+                return { success: false, message: e.message || "Unknown error" };
             }
         }
 
@@ -367,7 +376,11 @@
 
             document.getElementById('signInForm').addEventListener('submit', function(e) {
                 e.preventDefault();
-                if (!isQuizActive) { showQuizOffModal(); return; }
+                // Check if quiz is enabled before starting
+                if (!isQuizActive) { 
+                    showQuizOffModal(); 
+                    return; 
+                }
                 studentInfo = {
                     name: document.getElementById('studentName').value.trim(),
                     email: document.getElementById('collegeEmail').value.trim(),
@@ -423,27 +436,20 @@
             };
         }
 
-        // --- RESULTS ---
         async function calculateAndShowResults(wasTerminated) {
             LOADING_OVERLAY.style.display = 'flex';
+
             let score = 0;
             quizQuestions.forEach((q, idx) => { if (studentResponses[idx] === q.answer) score++; });
-            const percentageVal = ((score / quizQuestions.length) * 100).toFixed(2);
 
-            const resultData = {
-                name: studentInfo.name, 
-                email: studentInfo.email, 
-                admissionNo: studentInfo.admissionNo, 
-                score, 
-                total: quizQuestions.length,
-                percentage: percentageVal,
-                violations: proctoringViolations.total, 
-                windowSwitchViolations: proctoringViolations.windowSwitch,
-                copyPasteViolations: proctoringViolations.copyPaste
-            };
+            // Save Locally for backup
+            const result = saveResultLocally(
+                studentInfo.name, studentInfo.email, studentInfo.admissionNo, 
+                score, quizQuestions.length, proctoringViolations
+            );
 
             // Upload to Supabase
-            const uploadStatus = await uploadResultToSupabase(resultData);
+            const uploadStatus = await uploadResultToSupabase(result);
 
             LOADING_OVERLAY.style.display = 'none';
             renderFinalScreen(score, wasTerminated, uploadStatus);
@@ -452,8 +458,8 @@
         function renderFinalScreen(score, wasTerminated, uploadStatus) {
             const statusClass = uploadStatus.success ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700';
             const statusIcon = uploadStatus.success ? 'fa-check-circle' : 'fa-exclamation-circle';
-            const statusMsg = uploadStatus.success ? 'Saved to Database' : 'Database Upload Failed';
-            const errorDetail = uploadStatus.success ? '' : `<p class="text-xs mt-1 text-red-600 break-all">${uploadStatus.message}</p>`;
+            const statusMsg = uploadStatus.success ? 'Saved to Database' : 'Upload Failed';
+            const errorDetail = uploadStatus.success ? '' : `<p class="text-xs mt-2 text-red-600 font-bold break-words p-2 bg-red-50 rounded border border-red-200">${uploadStatus.message}</p>`;
 
             APP_CONTAINER.className = "flex items-center justify-center min-h-screen p-4 bg-gray-50";
             APP_CONTAINER.innerHTML = `
@@ -463,8 +469,10 @@
                     </div>
                     <h2 class="text-3xl font-extrabold text-gray-900 mb-3">${wasTerminated ? 'Terminated' : 'Submitted'}</h2>
                     
-                    <div class="mb-6 p-3 rounded-lg ${statusClass} inline-block">
-                        <i class="fas ${statusIcon} mr-2"></i> <span class="font-bold">${statusMsg}</span>
+                    <div class="mb-6 p-3 rounded-lg ${statusClass} inline-block w-full">
+                        <div class="flex items-center justify-center">
+                            <i class="fas ${statusIcon} mr-2"></i> <span class="font-bold">${statusMsg}</span>
+                        </div>
                         ${errorDetail}
                     </div>
 
@@ -498,92 +506,165 @@
             };
         }
 
-        // --- ADMIN LEADERBOARD (Using Supabase Data) ---
-        async function renderLeaderboard() {
-            // 1. Render Skeleton first
+        // --- SUPABASE LEADERBOARD WITH FILTERS ---
+        function renderLeaderboard() {
+            // 1. Render UI Skeleton with Filters
             APP_CONTAINER.className = "flex items-start justify-center min-h-screen p-4 bg-gray-100";
             APP_CONTAINER.innerHTML = `
                 <div class="w-full max-w-6xl bg-white rounded-2xl shadow-xl p-8 mt-10">
-                    <div class="flex justify-between items-center mb-6">
-                        <h2 class="text-2xl font-bold text-gray-900">Global Leaderboard (Supabase)</h2>
-                        <div>
-                            <button id="refreshBtn" class="px-4 py-2 bg-blue-100 text-blue-700 rounded-lg mr-2 hover:bg-blue-200 font-semibold text-sm"><i class="fas fa-sync-alt mr-1"></i> Refresh</button>
-                            <button id="quizToggle" class="px-4 py-2 text-white rounded-lg mr-2 ${isQuizActive ? 'bg-green-600' : 'bg-red-600'} text-sm font-semibold">Quiz: ${isQuizActive?'ON':'OFF'}</button>
-                            <button onclick="setView('signin')" class="px-4 py-2 border rounded-lg text-blue-600 border-blue-600 text-sm font-semibold">Home</button>
+                    <div class="flex flex-col md:flex-row justify-between items-center mb-6 gap-4">
+                        <h2 class="text-2xl font-bold text-gray-800">Leaderboard</h2>
+                        
+                        <div class="flex flex-wrap gap-2">
+                            <button id="refreshBtn" class="px-4 py-2 bg-indigo-500 hover:bg-indigo-600 text-white rounded-lg shadow text-sm"><i class="fas fa-sync-alt mr-1"></i> Refresh</button>
+                            <button id="quizToggle" class="px-4 py-2 text-white rounded-lg ${isQuizActive ? 'bg-green-600' : 'bg-red-600'} text-sm">Quiz: ${isQuizActive?'ON':'OFF'}</button>
+                            <button id="homeBtn" class="px-4 py-2 border rounded-lg text-blue-600 border-blue-600 hover:bg-blue-50 text-sm">Log Out</button>
                         </div>
                     </div>
-                    <div class="overflow-x-auto rounded-lg border shadow-sm">
+
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6 p-4 bg-gray-50 rounded-lg border border-gray-200">
+                        <div>
+                            <label class="block text-xs font-semibold text-gray-500 mb-1">SEARCH</label>
+                            <input type="text" id="searchInput" placeholder="Name or Admission No..." class="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-semibold text-gray-500 mb-1">SORT BY</label>
+                            <select id="sortSelect" class="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white">
+                                <option value="score_desc">Highest Score</option>
+                                <option value="score_asc">Lowest Score</option>
+                                <option value="violation_desc">Most Violations</option>
+                                <option value="date_desc">Newest First</option>
+                                <option value="date_asc">Oldest First</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-semibold text-gray-500 mb-1">TIME FILTER</label>
+                            <select id="dateFilter" class="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white">
+                                <option value="all">All Time</option>
+                                <option value="today">Today</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="overflow-x-auto rounded-lg border">
                         <table class="min-w-full divide-y divide-gray-200">
-                            <thead class="bg-gray-50">
+                            <thead class="bg-gray-100">
                                 <tr>
-                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Rank</th>
-                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Student Details</th>
-                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Score</th>
-                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Violations</th>
-                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Submitted At</th>
+                                    <th class="px-6 py-3 text-left text-xs font-bold text-gray-600 uppercase tracking-wider">#</th>
+                                    <th class="px-6 py-3 text-left text-xs font-bold text-gray-600 uppercase tracking-wider">Student</th>
+                                    <th class="px-6 py-3 text-left text-xs font-bold text-gray-600 uppercase tracking-wider">Adm No</th>
+                                    <th class="px-6 py-3 text-left text-xs font-bold text-gray-600 uppercase tracking-wider">Score</th>
+                                    <th class="px-6 py-3 text-left text-xs font-bold text-gray-600 uppercase tracking-wider">Violations</th>
+                                    <th class="px-6 py-3 text-left text-xs font-bold text-gray-600 uppercase tracking-wider">Date</th>
                                 </tr>
                             </thead>
                             <tbody id="leaderboardBody" class="bg-white divide-y divide-gray-200">
-                                <tr><td colspan="5" class="p-10 text-center text-gray-500"><div class="spinner mx-auto mb-2"></div>Fetching data from database...</td></tr>
+                                <tr><td colspan="6" class="p-10 text-center"><div class="spinner mx-auto"></div><p class="text-gray-500">Loading Data...</p></td></tr>
                             </tbody>
                         </table>
                     </div>
                 </div>`;
-                
-            // 2. Handle Toggle Button
+
+            // Internal function to fetch data based on current inputs
+            const fetchAndRender = async () => {
+                const tbody = document.getElementById('leaderboardBody');
+                tbody.innerHTML = `<tr><td colspan="6" class="p-10 text-center"><div class="spinner mx-auto"></div><p class="text-gray-500">Updating...</p></td></tr>`;
+
+                const searchTerm = document.getElementById('searchInput').value.trim();
+                const sortValue = document.getElementById('sortSelect').value;
+                const dateFilter = document.getElementById('dateFilter').value;
+
+                let query = client.from(SUPABASE_TABLE_NAME).select('*');
+
+                // Apply Search
+                if (searchTerm) {
+                    query = query.or(`student_name.ilike.%${searchTerm}%,admission_no.ilike.%${searchTerm}%`);
+                }
+
+                // Apply Date Filter
+                if (dateFilter === 'today') {
+                    const todayStart = new Date();
+                    todayStart.setHours(0,0,0,0);
+                    query = query.gte('submission_time', todayStart.toISOString());
+                }
+
+                // Apply Sorting
+                switch(sortValue) {
+                    case 'score_desc': query = query.order('score', { ascending: false }); break;
+                    case 'score_asc': query = query.order('score', { ascending: true }); break;
+                    case 'violation_desc': query = query.order('total_violations', { ascending: false }); break;
+                    case 'date_desc': query = query.order('submission_time', { ascending: false }); break;
+                    case 'date_asc': query = query.order('submission_time', { ascending: true }); break;
+                    default: query = query.order('score', { ascending: false });
+                }
+
+                if (!sortValue.includes('date')) {
+                    query = query.order('submission_time', { ascending: false });
+                }
+
+                try {
+                    const { data, error } = await query;
+
+                    if (error) throw error;
+
+                    if (!data || data.length === 0) {
+                        tbody.innerHTML = `<tr><td colspan="6" class="p-6 text-center text-gray-500">No records found matching criteria.</td></tr>`;
+                        return;
+                    }
+
+                    tbody.innerHTML = data.map((entry, i) => {
+                        const name = entry.student_name || 'Unknown';
+                        const adm = entry.admission_no || '-';
+                        const score = entry.score;
+                        const totalQ = entry.total_questions || 20;
+                        const viol = entry.total_violations || 0;
+                        const dateStr = entry.submission_time ? new Date(entry.submission_time).toLocaleString() : 'N/A';
+                        
+                        return `
+                        <tr class="${i%2?'bg-gray-50':'bg-white'} hover:bg-gray-100 transition">
+                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 font-mono">${i+1}</td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">${name}</td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${adm}</td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900 font-bold">${score} / ${totalQ}</td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm ${viol>0?'text-red-600 font-bold':'text-green-600'}">${viol}</td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-400">${dateStr}</td>
+                        </tr>`;
+                    }).join('');
+                } catch (err) {
+                    console.error(err);
+                    tbody.innerHTML = `<tr><td colspan="6" class="p-6 text-center text-red-600">Error: ${err.message}</td></tr>`;
+                }
+            };
+
+            // Event Listeners
+            document.getElementById('homeBtn').onclick = () => setView('signin');
             document.getElementById('quizToggle').onclick = () => {
                 isQuizActive = !isQuizActive;
                 localStorage.setItem('isQuizActive', isQuizActive);
-                renderLeaderboard(); // Re-render to update button color/text
+                renderLeaderboard(); 
             };
+            document.getElementById('refreshBtn').onclick = fetchAndRender;
+            document.getElementById('sortSelect').addEventListener('change', fetchAndRender);
+            document.getElementById('dateFilter').addEventListener('change', fetchAndRender);
+            
+            let searchTimeout;
+            document.getElementById('searchInput').addEventListener('input', () => {
+                clearTimeout(searchTimeout);
+                searchTimeout = setTimeout(fetchAndRender, 500);
+            });
 
-            // 3. Handle Refresh Button
-            document.getElementById('refreshBtn').onclick = renderLeaderboard;
-
-            // 4. Fetch Data from Supabase
-            const data = await fetchSupabaseLeaderboard();
-            const tbody = document.getElementById('leaderboardBody');
-
-            // 5. Render Rows
-            if (!data || data.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="5" class="p-6 text-center text-gray-500">No submissions found in the database.</td></tr>';
-                return;
-            }
-
-            tbody.innerHTML = data.map((entry, i) => {
-                const dateObj = new Date(entry.submission_time);
-                const dateStr = dateObj.toLocaleDateString() + ' ' + dateObj.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
-                
-                return `
-                <tr class="${i%2?'bg-gray-50':'bg-white'} hover:bg-gray-100 transition">
-                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 font-bold">#${i+1}</td>
-                    <td class="px-6 py-4">
-                        <div class="text-sm font-medium text-gray-900">${entry.student_name || 'Unknown'}</div>
-                        <div class="text-xs text-gray-500">${entry.college_email || 'No Email'}</div>
-                        <div class="text-xs text-gray-400">ID: ${entry.admission_no || 'N/A'}</div>
-                    </td>
-                    <td class="px-6 py-4 whitespace-nowrap">
-                        <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-green-100 text-green-800">
-                            ${entry.score} / ${entry.total_questions}
-                        </span>
-                        <div class="text-xs text-gray-500 mt-1">${entry.percentage}%</div>
-                    </td>
-                    <td class="px-6 py-4 whitespace-nowrap text-sm">
-                        ${entry.total_violations > 0 
-                            ? `<div class="text-red-600 font-bold mb-1">${entry.total_violations} Violations</div>
-                               <div class="text-xs text-gray-500">Tabs: ${entry.window_switch_violations}</div>
-                               <div class="text-xs text-gray-500">Copy: ${entry.copy_paste_violations}</div>`
-                            : '<span class="text-green-600 font-medium"><i class="fas fa-check-circle mr-1"></i>Clean</span>'}
-                    </td>
-                    <td class="px-6 py-4 whitespace-nowrap text-xs text-gray-500">${dateStr}</td>
-                </tr>`;
-            }).join('');
+            fetchAndRender();
         }
 
         // --- INIT ---
         document.addEventListener('DOMContentLoaded', () => {
             setView('signin');
             ADMIN_BUTTON.onclick = () => setView('admin');
+            
+            // Initialize the quiz off modal close button
+            QUIZ_OFF_CONFIRM_BTN.onclick = () => {
+                QUIZ_OFF_MODAL.style.display = 'none';
+            };
             
             const fsHandler = () => {
                 if (!document.fullscreenElement && !document.webkitFullscreenElement && currentQuestionIndex < quizQuestions.length && VIOLATION_MODAL.style.display !== 'flex') {
