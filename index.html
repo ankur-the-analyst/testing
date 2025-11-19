@@ -292,14 +292,12 @@
         function handleProctoringViolation(type) {
             if (currentQuestionIndex >= quizQuestions.length) return; 
             
-            // This handles Tab Switch AND Notification Panel Pull-down
             if (type === 'windowSwitch') {
                 if (violationCooldown) return; 
                 
                 proctoringViolations.windowSwitch++; // Counts towards tab switch column
                 violationCooldown = true;
                 
-                // Cooldown prevents double-counting (e.g. Blur + VisibilityChange happen together)
                 setTimeout(() => { violationCooldown = false; }, 2000);
                 requestFullScreen(); 
             } 
@@ -315,18 +313,21 @@
             else if (type === 'windowSwitch') showViolationModal(false); 
         }
         
-        // Standard Tab Switch / Minimize detection
+        // 1. APP SWITCH / MINIMIZE (Robust)
         const visibilityChangeHandler = () => { 
             if (document.hidden) handleProctoringViolation('windowSwitch'); 
         };
         
-        // NOTIFICATION PANEL DETECTION
-        // Pulling down the notification shade on mobile triggers 'blur' (loss of focus) 
-        // and often 'focusout'. We listen to both to ensure it catches the action.
+        // 2. NOTIFICATION PANEL / OVERLAY DETECTION
         const blurHandler = () => { 
+            // FIX: We check if document explicitly lost focus. 
+            // IMPORTANT: We removed 'focusout' listener which was causing the bug on clicks.
+            // Window blur usually means the USER left the window context (e.g. clicked URL bar, pulled notification shade).
+            if(violationCooldown) return;
             handleProctoringViolation('windowSwitch'); 
         };
         
+        // 3. COPY PASTE PROTECTION
         const copyCutPasteHandler = (e) => {
             e.preventDefault();
             showTempMessage('Content protected.', true); 
@@ -336,9 +337,9 @@
         function enableProctoring() {
             document.addEventListener('visibilitychange', visibilityChangeHandler);
             
-            // These two events catch the Notification Panel pull-down on Mobile
+            // FIX: REMOVED 'focusout' listener. Kept only 'blur' on window.
+            // 'focusout' bubbles from elements (clicks), 'blur' on window does not bubble from elements in most contexts.
             window.addEventListener('blur', blurHandler); 
-            window.addEventListener('focusout', blurHandler); 
             
             document.addEventListener('copy', copyCutPasteHandler);
             document.addEventListener('cut', copyCutPasteHandler);
@@ -348,7 +349,6 @@
         function disableProctoring() {
             document.removeEventListener('visibilitychange', visibilityChangeHandler);
             window.removeEventListener('blur', blurHandler);
-            window.removeEventListener('focusout', blurHandler);
             document.removeEventListener('copy', copyCutPasteHandler);
             document.removeEventListener('cut', copyCutPasteHandler);
             document.removeEventListener('paste', copyCutPasteHandler);
