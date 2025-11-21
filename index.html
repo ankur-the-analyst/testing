@@ -2,124 +2,162 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Proctored Business & Finance Quiz</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>ISB Quiz-1</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <style>
-        #app { min-height: 100vh; }
+        /* General Setup */
+        #app { min-height: 100vh; -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
         
+        /* Quiz Timer Styles */
         #progressBarContainer { position: relative; height: 8px; background-color: #e5e7eb; border-radius: 4px; overflow: hidden; margin-bottom: 10px; }
         #progressBar { height: 100%; width: 100%; background-color: #ef4444; transition: width 1s linear; }
-        #countdownTimer { font-size: 1.25rem; font-weight: 700; color: #ef4444; text-align: right; margin-bottom: 10px; }
+        /* Adjusted timer style for total time */
+        #countdownTimer { 
+            font-size: 1.25rem; 
+            font-weight: 700; 
+            color: #ef4444; 
+            text-align: center; /* Center the total timer */
+            margin-bottom: 10px; 
+            padding: 8px;
+            border: 2px solid #ef4444;
+            border-radius: 8px;
+            background-color: #fee2e2;
+        }
         
         /* Loading Overlay */
         #loadingOverlay {
             position: fixed; inset: 0; background: rgba(255,255,255,0.95); 
-            z-index: 9999; display: none; flex-direction: column; 
-            align-items: center; justify-content: center;
+            z-index: 50; display: none; flex-direction: column; justify-content: center; align-items: center;
         }
+        
+        /* Violation Modal */
+        #violationModal, #quizOffModal {
+            position: fixed; inset: 0; background: rgba(0,0,0,0.5); 
+            z-index: 55; display: none; justify-content: center; align-items: center;
+        }
+        .modal-content {
+            background: white; padding: 2.5rem; border-radius: 1rem; max-width: 90%; width: 400px; text-align: center;
+            box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+        }
+
+        /* Spinner */
         .spinner {
-            border: 4px solid #f3f3f3; border-top: 4px solid #3498db; 
-            border-radius: 50%; width: 50px; height: 50px; 
-            animation: spin 1s linear infinite; margin-bottom: 15px;
+            border: 4px solid rgba(0, 0, 0, 0.1);
+            width: 36px; height: 36px; border-radius: 50%; border-left-color: #f59e0b;
+            animation: spin 1s ease infinite;
         }
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
 
-        /* Mobile Warning Box */
-        .mobile-warning {
-            background-color: #fff3cd;
-            border-left: 4px solid #ffc107;
-            color: #856404;
-            padding: 15px;
-            margin-bottom: 20px;
-            font-size: 0.9rem;
-            border-radius: 4px;
+        /* Question Panel Button Style - MODIFIED */
+        .q-panel-btn {
+            width: 40px; 
+            height: 40px; 
+            display: flex; 
+            align-items: center; 
+            justify-content: center; 
+            font-weight: 600; 
+            border-radius: 0.5rem; 
+            transition: all 0.2s;
+            position: relative;
+            border: 2px solid transparent; /* Base border */
         }
+        /* New Status Colors */
+        .q-panel-btn.unvisited { background-color: #e5e7eb; color: #6b7280; } /* Gray */
+        .q-panel-btn.viewed { background-color: #fcd34d; color: #78350f; } /* Yellow */
+        .q-panel-btn.answered { background-color: #10b981; color: white; } /* Green */
+        .q-panel-btn.current { 
+            background-color: #3b82f6; 
+            color: white; 
+            border-color: #1d4ed8; 
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+        }
+        .q-panel-btn.current.flagged {
+             border-color: #b91c1c; /* Darker red for current + flagged */
+             box-shadow: 0 4px 6px -1px rgba(185, 28, 28, 0.5);
+        }
+        /* Flag Icon Style */
+        .q-panel-btn .flag-icon {
+            position: absolute;
+            top: -4px;
+            right: -4px;
+            color: #b91c1c; /* Dark Red for flag */
+            font-size: 0.8rem;
+            text-shadow: 0 0 3px rgba(255,255,255,0.8);
+        }
+        .q-panel-btn:not(.current):hover { transform: scale(1.05); }
+        .q-panel-btn.flagged:not(.current) { border-color: #b91c1c; } /* Red border for flagged */
     </style>
 </head>
-<body class="bg-gray-50 select-none">
+<body>
+    <div id="app">
+        </div>
 
     <div id="loadingOverlay">
-        <div class="spinner"></div>
-        <h2 class="text-xl font-bold text-gray-800">Processing...</h2>
-        <p class="text-gray-500">Syncing with Database...</p>
+        <div class="spinner mb-4"></div>
+        <p class="text-gray-700 font-semibold">Processing...</p>
     </div>
 
-    <div id="app" class="flex items-center justify-center p-4"></div>
+    <div id="violationModal">
+        <div class="modal-content">
+            <i class="fas fa-exclamation-triangle text-yellow-500 text-4xl mb-4"></i>
+            <div id="violationMessage" class="mb-6"></div>
+            <button id="modalConfirmBtn"></button>
+        </div>
+    </div>
 
-    <div id="violationModal" class="fixed inset-0 bg-black bg-opacity-90 hidden items-center justify-center z-50 transition-opacity duration-300">
-        <div class="bg-white rounded-xl shadow-2xl max-w-sm w-full p-6 text-center border-4 border-red-500">
-            <i class="fas fa-hand-paper text-4xl text-red-600 mb-4"></i>
-            <h3 class="text-xl font-bold text-gray-900 mb-3">Violation Detected!</h3>
-            <p id="violationMessage" class="text-gray-800 mb-6 text-sm font-medium"></p>
-            <button id="modalConfirmBtn" class="w-full py-3 px-4 rounded-lg text-white font-bold bg-red-600 hover:bg-red-700 transition uppercase tracking-wide">I Understand</button>
+    <div id="quizOffModal">
+        <div class="modal-content">
+            <i class="fas fa-exclamation-circle text-red-500 text-4xl mb-4"></i>
+            <p class="text-xl font-bold text-gray-900 mb-3">Quiz Not Started</p>
+            <div id="quizOffMessage" class="mb-6 text-gray-700"></div>
+            <button id="quizOffConfirmBtn" class="w-full py-3 px-4 rounded-lg text-white font-bold bg-gray-500 hover:bg-gray-600 transition shadow-md">Close</button>
         </div>
     </div>
-    
-    <div id="quizOffModal" class="fixed inset-0 bg-black bg-opacity-70 hidden items-center justify-center z-50 transition-opacity duration-300">
-        <div class="bg-white rounded-xl shadow-2xl max-w-sm w-full p-6 text-center">
-            <i class="fas fa-clock text-4xl text-blue-500 mb-4"></i>
-            <h3 class="text-xl font-bold text-gray-900 mb-3">Quiz Unavailable</h3>
-            <p id="quizOffMessage" class="text-gray-600 mb-6 text-base font-medium">The administrator has not started the quiz yet. Please wait.</p>
-            <button id="quizOffConfirmBtn" class="w-full py-2 px-4 rounded-lg text-white font-semibold bg-blue-600 hover:bg-blue-700 transition">Okay, I will wait</button>
-        </div>
-    </div>
-    
+
     <script>
         // --- SUPABASE CONFIGURATION ---
         const SUPABASE_URL = 'https://tdxausibwaagbhnbgkgz.supabase.co'; 
         const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRkeGF1c2lid2FhZ2JobmJna2d6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjMwNDgyMDYsImV4cCI6MjA3ODYyNDIwNn0.ApeJFTg-pQaV2gigOUTGpKnMY_AFnT1v5DPpYCCmOKY';
-        const SUPABASE_TABLE_NAME = 'quiz_submissions'; 
-
+        
+        const SUPABASE_SUBMISSIONS_TABLE = 'quiz_submissions'; 
+        const SUPABASE_QUESTIONS_TABLE = 'quiz_questions';
         const STATIC_QUIZ_UUID = '5f4b3d2c-1a0e-9f8d-7c6b-5a4e3d2c1b0a';
 
-        // Initialize Supabase
+        // Initialize Supabase client
         const { createClient } = supabase;
         const client = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
         // --- QUIZ DATA ---
-        const quizQuestions = [
-            { question: "Who is the CEO of Apple Inc.?", options: ["Steve Jobs", "Tim Cook", "Mark Zuckerberg", "Elon Musk"], answer: "Tim Cook" },
-            { question: "Who is the CEO of HDFC Bank (as of 2025)?", options: ["Aditya Puri", "Sashidhar Jagdishan", "N. Chandrasekaran", "Shailesh Chandra"], answer: "Sashidhar Jagdishan" },
-            { question: "Who is the CEO of Tata Sons?", options: ["N. Chandrasekaran", "Ratan Tata", "Cyrus Mistry", "Noel Tata"], answer: "N. Chandrasekaran" },
-            { question: "What does IPO stand for?", options: ["Initial Public Offering", "International Product Order", "Industrial Policy Objective", "Internal Purchase Option"], answer: "Initial Public Offering" },
-            { question: "What does KPI stand for?", options: ["Key Performance Indicator", "Knowledge Processing Index", "Key Product Inventory", "Known Profit Index"], answer: "Key Performance Indicator" },
-            { question: "What is a blue-chip company?", options: ["Large, established, financially sound firm", "New startup", "Government enterprise", "Small-cap company"], answer: "Large, established, financially sound firm" },
-            { question: "The 2025 Union Budget of India was presented on", options: ["1 January 2025", "1 February 2025", "1 March 2025", "1 April 2025"], answer: "1 March 2025" },
-            { question: "The term “start-up unicorn” refers to a private company valued at:", options: ["Over US $100 million", "Over US $1 billion", "Over US $500 million", "Over US $10 billion"], answer: "Over US $1 billion" },
-            { question: "The program “PLI scheme” in India is related to:", options: ["Private Lending Initiative", "Production Linked Incentive", "Public Listing Initiative", "Pension Linked Interest"], answer: "Production Linked Incentive" },
-            { question: "The parent company of Tanishq is:", options: ["Titan", "Reliance", "Aditya Birla Group", "Dabur"], answer: "Titan" },
-            { question: "“Think Different” is associated with:", options: ["Apple", "Microsoft", "Samsung", "Dell"], answer: "Apple" },
-            { question: "SEBI regulates:", options: ["Stock Market in India", "Banking Sector", "Insurance Companies", "E-commerce"], answer: "Stock Market in India" },
-            { question: "“The Big Four” accounting firms include all except:", options: ["Deloitte", "PwC", "EY", "KPMG India Limited"], answer: "KPMG India Limited" },
-            { question: "Which is the largest public sector bank in India?", options: ["State Bank of India", "Punjab National Bank", "Bank of Baroda", "Canara Bank"], answer: "State Bank of India" },
-            { question: "Who is the current Governor of RBI (2025)?", options: ["Shaktikanta Das", "Urjit Patel", "Raghuram Rajan", "D. Subbarao"], answer: "Shaktikanta Das" },
-            { question: "SBI’s tagline is:", options: ["“The Banker to Every Indian”", "“We Understand Your World”", "“Trusted Family Bank”", "“Your Perfect Partner”"], answer: "“The Banker to Every Indian”" },
-            { question: "The first Indian bank to open a branch outside India was:", options: ["Bank of India", "SBI", "PNB", "Canara Bank"], answer: "Bank of India" },
-            { question: "Which startup is known as “India’s leading edtech company”?", options: ["BYJU’S", "Unacademy", "Vedantu", "Simplilearn"], answer: "BYJU’S" },
-            { question: "Which company became India’s first to cross $250 billion market cap?", options: ["Reliance Industries", "Tata Consultancy Services", "Infosys", "HDFC Bank"], answer: "Reliance Industries" },
-            { question: "Which Indian bank ranked highest in “World’s Best Banks 2024” by Forbes?", options: ["HDFC Bank", "SBI", "Axis Bank", "ICICI"], answer: "HDFC Bank" }
-        ];
+        let quizQuestions = []; 
 
         // --- STATE ---
         let studentInfo = {};
         let currentQuestionIndex = 0;
-        let studentResponses = Array(quizQuestions.length).fill(null);
+        let studentResponses = []; 
+        let questionStatus = []; // New array to track status: 0=unvisited, 1=viewed, 2=answered
+        let questionFlags = []; // New array to track flags: false=not flagged, true=flagged
         let timerInterval;
-        const TIME_PER_QUESTION = 10; 
-        let timeLeft = TIME_PER_QUESTION;
+        
+        // MODIFIED: Total Quiz Time (15 minutes = 900 seconds)
+        const TOTAL_QUIZ_TIME = 15 * 60; 
+        let timeLeft = TOTAL_QUIZ_TIME; 
+        let isTimerRunning = false; 
+        let isQuizSubmitted = false; 
         let isQuizActive = localStorage.getItem('isQuizActive') === 'false' ? false : true; 
         
-        // Violations - Extension violations are now merged into windowSwitch
         let proctoringViolations = { total: 0, windowSwitch: 0, copyPaste: 0 };
         const MAX_VIOLATIONS = 3;
-        const WINDOW_SWITCH_COOLDOWN = 1000; // 1 second
+        
+        const WINDOW_SWITCH_COOLDOWN = 2000; // Increased cooldown for iPad task switching
+        const EXTENSION_CHECK_INTERVAL = 1000; 
+        
         let violationCooldown = false; 
         let extensionCheckInterval; 
         
-        // **Universal Edge Thresholds**
+        // Universal Edge Thresholds for swipe detection
         const EDGE_THRESHOLD = 50; 
         const TOP_EDGE_THRESHOLD = 50; 
 
@@ -133,6 +171,20 @@
         const LOADING_OVERLAY = document.getElementById('loadingOverlay');
 
         // --- UTILITIES ---
+
+        // iPad/iOS Detection Helper
+        function isIOS() {
+            return [
+                'iPad Simulator',
+                'iPhone Simulator',
+                'iPod Simulator',
+                'iPad',
+                'iPhone',
+                'iPod'
+            ].includes(navigator.platform)
+            // iPad on iOS 13 detection
+            || (navigator.userAgent.includes("Mac") && "ontouchend" in document);
+        }
 
         function generateUUID() {
             if (typeof crypto !== 'undefined' && crypto.randomUUID) {
@@ -152,17 +204,24 @@
             }
         }
 
+        function formatTime(seconds) {
+            const min = Math.floor(seconds / 60);
+            const sec = seconds % 60;
+            return `${min.toString().padStart(2, '0')}:${sec.toString().padStart(2, '0')}`;
+        }
+
         function setView(viewName) {
             VIOLATION_MODAL.style.display = 'none';
             QUIZ_OFF_MODAL.style.display = 'none'; 
             LOADING_OVERLAY.style.display = 'none';
 
-            const signInForm = document.getElementById('signInForm');
-            if(signInForm) signInForm.style.display = 'block'; 
-
             APP_CONTAINER.innerHTML = '';
 
+            // Stop timer if switching away from the quiz
+            if (viewName !== 'quiz') stopTotalTimer();
+
             if (viewName === 'signin') renderSignIn();
+            else if (viewName === 'proctoringRules') renderProctoringRules(); 
             else if (viewName === 'quiz') renderQuiz();
             else if (viewName === 'admin') renderAdminLogin();
             else if (viewName === 'leaderboard') renderLeaderboard(); 
@@ -171,7 +230,7 @@
         function showQuizOffModal() {
             const msg = document.getElementById('quizOffMessage');
             if (msg) {
-                msg.innerHTML = "The administrator has <strong class='text-red-500'>NOT started</strong> the quiz yet.<br><br>Please wait for further instructions.";
+                msg.innerHTML = "The admin has <strong class='text-red-500'>not started</strong> the exam yet.<br><br>Please wait for further instructions.";
             }
             QUIZ_OFF_MODAL.style.display = 'flex';
         }
@@ -190,23 +249,14 @@
             setTimeout(() => { tempDiv.style.opacity = '0'; }, 4000);
         }
 
-        function getLeaderboard() {
-            try {
-                const data = localStorage.getItem('quizLeaderboard');
-                return data ? JSON.parse(data) : [];
-            } catch (e) { return []; }
-        }
-
         function saveResultLocally(name, email, admissionNo, score, totalQuestions, violations) {
-            const leaderboard = getLeaderboard();
+            const leaderboard = JSON.parse(localStorage.getItem('quizLeaderboard') || '[]');
             const percentageVal = ((score / totalQuestions) * 100).toFixed(2);
             const result = {
                 name, email, admissionNo, score, total: totalQuestions,
                 percentage: percentageVal,
                 violations: violations.total, 
-                // Extension and Swipe violations are logged under windowSwitchViolations
                 windowSwitchViolations: violations.windowSwitch, 
-                // Copy, Paste, Cut, and Screenshot violations are logged under copyPasteViolations
                 copyPasteViolations: violations.copyPaste,
                 timestamp: new Date().toLocaleString()
             };
@@ -234,26 +284,59 @@
                 admission_no: resultData.admissionNo,
             };
             try {
-                const { data, error } = await client.from(SUPABASE_TABLE_NAME).insert([dataToInsert]).select(); 
+                const { error } = await client.from(SUPABASE_SUBMISSIONS_TABLE).insert([dataToInsert]); 
                 if (error) throw error; 
                 return { success: true };
             } catch (e) {
                 console.error('Upload Exception:', e);
                 if(e.message && e.message.includes("row-level security")) {
-                    return { success: false, message: "DATABASE PERMISSION ERROR: Check RLS policies." };
+                    return { success: false, message: "DATABASE PERMISSION ERROR: Check RLS policies on 'quiz_submissions' table." };
                 }
-                return { success: false, message: e.message || "Unknown error" };
+                return { success: false, message: e.message || "Unknown error during submission upload" };
+            }
+        }
+
+        // --- QUESTION FETCH LOGIC (Dynamically loads Q&A) ---
+        async function fetchQuizQuestionsFromSupabase() {
+            LOADING_OVERLAY.style.display = 'flex';
+            try {
+                const { data, error } = await client
+                    .from(SUPABASE_QUESTIONS_TABLE)
+                    .select('question, answer, option_a, option_b, option_c, option_d');
+                
+                if (error) throw error;
+
+                if (data.length === 0) {
+                    showTempMessage("No quiz questions found in the database. Contact admin.", true);
+                    return false;
+                }
+
+                quizQuestions = data.map(q => ({
+                    question: q.question,
+                    options: [q.option_a, q.option_b, q.option_c, q.option_d],
+                    answer: q.answer
+                }));
+                
+                studentResponses = Array(quizQuestions.length).fill(null);
+                questionStatus = Array(quizQuestions.length).fill(0); 
+                questionFlags = Array(quizQuestions.length).fill(false);
+
+                return true;
+            } catch (e) {
+                console.error('Fetch Questions Exception:', e);
+                showTempMessage("Failed to load quiz questions: " + e.message, true);
+                return false;
+            } finally {
+                LOADING_OVERLAY.style.display = 'none';
             }
         }
 
         // --- PROCTORING LOGIC ---
         function requestFullScreen() {
+            // Relaxed for iOS - don't show error msg if it fails, just try it
             const element = document.documentElement;
             if (element.requestFullscreen) {
-                element.requestFullscreen().catch(e => {
-                    console.error("Fullscreen Request Failed on user click:", e);
-                    showTempMessage('Browser blocked automatic Full Screen. Please click the full screen icon manually.', true);
-                });
+                element.requestFullscreen().catch(e => { console.log("Fullscreen skipped (iOS/Blocked)"); });
             }
             else if (element.mozRequestFullScreen) element.mozRequestFullScreen();
             else if (element.webkitRequestFullscreen) element.webkitRequestFullscreen();
@@ -269,21 +352,21 @@
         
         function showViolationModal(isTerminating, reason) {
             if (isTerminating) {
-                VIOLATION_MESSAGE.innerHTML = `<p class="text-red-700 font-bold mb-2 text-lg">EXAM TERMINATED</p><p>You exceeded the limit of ${MAX_VIOLATIONS} violations.</p>`;
+                VIOLATION_MESSAGE.innerHTML = `<p class="text-red-700 font-bold mb-2 text-lg">EXAM TERMINATED</p><p>You exceeded the limit of ${MAX_VIOLATIONS} violations. The exam will now be submitted.</p>`;
                 MODAL_CONFIRM_BTN.textContent = 'Submit Exam Now';
                 MODAL_CONFIRM_BTN.className = "w-full py-3 px-4 rounded-lg text-white font-bold bg-red-700 hover:bg-red-800 transition shadow-lg";
+                
+                stopTotalTimer(); 
+                disableProctoring(); 
+                exitFullScreen();
+                
                 MODAL_CONFIRM_BTN.onclick = () => {
                     VIOLATION_MODAL.style.display = 'none';
-                    stopTimer();
-                    disableProctoring(); 
-                    exitFullScreen();
                     calculateAndShowResults(true); 
                 };
             } else {
-                // *** FIX: Pause the extension check interval to prevent repeated modal triggers ***
                 clearInterval(extensionCheckInterval); 
                 
-                // Specific messages based on violation type
                 let detailMsg = "Suspicious activity detected.";
                 if (reason === 'swipedown') detailMsg = "Do not swipe from the **top edge** (Notification Panel).";
                 else if (reason === 'swipeleft' || reason === 'swiperight') detailMsg = "Do not swipe from the **side edges** (Browser Navigation).";
@@ -300,31 +383,28 @@
                         <p class="font-bold text-red-600">Violation ${proctoringViolations.total} of ${MAX_VIOLATIONS}</p>
                     </div>
                 `;
-                // Resume Quiz button is tied directly to requestFullScreen, ensuring it's a user gesture.
-                MODAL_CONFIRM_BTN.textContent = 'Resume Quiz (Enable Full Screen)';
+                
+                MODAL_CONFIRM_BTN.textContent = 'Resume Quiz';
                 MODAL_CONFIRM_BTN.className = "w-full py-3 px-4 rounded-lg text-white font-bold bg-yellow-600 hover:bg-yellow-700 transition shadow-md";
                 MODAL_CONFIRM_BTN.onclick = () => {
                     VIOLATION_MODAL.style.display = 'none';
-                    
-                    // *** FIX: Resume the extension check interval on button click ***
-                    detectSpecificExtensionFootprints(); 
-                    extensionCheckInterval = setInterval(detectSpecificExtensionFootprints, 5000); 
-                    
-                    requestFullScreen(); // THIS MUST BE THE ONLY FULLSCREEN CALL TIED TO A CLICK
+                    extensionCheckInterval = setInterval(detectSpecificExtensionFootprints, EXTENSION_CHECK_INTERVAL); 
+                    requestFullScreen(); 
                 };
             }
             VIOLATION_MODAL.style.display = 'flex';
         }
 
         function handleProctoringViolation(type, reason) {
+            if (isQuizSubmitted) return; 
             if (currentQuestionIndex >= quizQuestions.length) return; 
+            if (proctoringViolations.total >= MAX_VIOLATIONS) return; 
             
             if (type === 'windowSwitch') {
                 if (violationCooldown) return; 
                 
                 proctoringViolations.windowSwitch++; 
                 violationCooldown = true;
-                
                 setTimeout(() => { violationCooldown = false; }, WINDOW_SWITCH_COOLDOWN); 
             } 
             else if (type === 'copyPaste') {
@@ -335,28 +415,23 @@
             proctoringViolations.total++;
 
             const vDisplay = document.getElementById('violationCountDisplay');
+            const vDisplayInner = document.getElementById('violationCountDisplayInner'); // Update both if exist
             if (vDisplay) vDisplay.innerHTML = `⚠️ Violations: ${proctoringViolations.total} / ${MAX_VIOLATIONS}`;
+            if (vDisplayInner) vDisplayInner.innerHTML = `⚠️ Violations: ${proctoringViolations.total} / ${MAX_VIOLATIONS}`;
 
-            if (proctoringViolations.total >= MAX_VIOLATIONS) showViolationModal(true, reason); 
-            // Only 'windowSwitch' type (which now includes extension events) triggers the non-terminating modal.
-            else if (type === 'windowSwitch') showViolationModal(false, reason); 
+            if (proctoringViolations.total >= MAX_VIOLATIONS) {
+                disableProctoring(); 
+                showViolationModal(true, reason); 
+            }
+            else if (type === 'windowSwitch') {
+                showViolationModal(false, reason); 
+            }
         }
         
-        // --- Extension Detection Logic (Indirect/Experimental) ---
         function detectSpecificExtensionFootprints() {
-            if (currentQuestionIndex >= quizQuestions.length || violationCooldown) return;
-
-            // Check 1: Known injected global properties from common extensions (e.g., ad-blockers, tools)
+            if (currentQuestionIndex >= quizQuestions.length || violationCooldown || isQuizSubmitted) return; 
             if (window.Stranalytics || window.adblocker || window.betterTranslate || window.__REACT_DEVTOOLS_GLOBAL_HOOK__) {
-                // Log as a windowSwitch type violation with reason 'extension'
                 handleProctoringViolation('windowSwitch', 'extension'); 
-                return;
-            }
-
-            // Check 2: Check for existence of Chrome/Firefox extension APIs outside of a secure context.
-            if (window.chrome && window.chrome.runtime) {
-                // Log as a windowSwitch type violation with reason 'extension'
-                handleProctoringViolation('windowSwitch', 'extension');
                 return;
             }
         }
@@ -367,12 +442,22 @@
         
         const blurHandler = () => { 
             if(violationCooldown) return;
+            // FIX: Check if the active element is an input (keyboard appearing on iPad)
+            if (document.activeElement && (document.activeElement.tagName === 'INPUT' || document.activeElement.tagName === 'TEXTAREA')) {
+                return;
+            }
             handleProctoringViolation('windowSwitch', 'blur'); 
         };
 
-        // 3. EDGE SWIPE DETECTION (TOUCH)
         const touchStartHandler = (e) => {
-            if (currentQuestionIndex >= quizQuestions.length) return; 
+            if (currentQuestionIndex >= quizQuestions.length || isQuizSubmitted) return;
+            
+            // FIX: Disable coordinate-based swipe detection on iOS/Mobile to prevent false positives on click
+            // User interactions (clicks) are registering as touches near edges on small screens.
+            // Only relying on visibilityChange (tab switch) for mobile proctoring.
+            if (isIOS() || /Android/i.test(navigator.userAgent)) {
+                return; 
+            }
 
             if(e.touches && e.touches.length > 0) {
                 const touchX = e.touches[0].clientX;
@@ -387,7 +472,7 @@
                 else if(touchY > screenHeight - EDGE_THRESHOLD) reason = 'swipeup';
                 
                 if (reason) {
-                    e.preventDefault(); 
+                    // e.preventDefault(); // Don't prevent default on touch, it blocks clicking
                     handleProctoringViolation('windowSwitch', reason);
                 }
             }
@@ -399,11 +484,9 @@
             handleProctoringViolation('copyPaste', 'copypaste');
         };
 
-        // 4. SCREENSHOT KEY DETECTION (PrintScreen)
         const screenshotKeyHandler = (e) => {
-            // Key codes for PrintScreen: 44 (standard, works cross-browser), 'PrintScreen' key name.
             if (e.key === 'PrintScreen' || e.keyCode === 44) {
-                e.preventDefault(); // Stop the default screenshot action
+                e.preventDefault(); 
                 showTempMessage('Screenshot attempt detected.', true); 
                 handleProctoringViolation('copyPaste', 'screenshot');
             } 
@@ -412,23 +495,19 @@
         function enableProctoring() {
             document.addEventListener('visibilitychange', visibilityChangeHandler);
             window.addEventListener('blur', blurHandler); 
-            
             document.addEventListener('touchstart', touchStartHandler, { passive: false });
-            
             document.addEventListener('copy', copyCutPasteHandler);
             document.addEventListener('cut', copyCutPasteHandler);
             document.addEventListener('paste', copyCutPasteHandler);
             document.addEventListener('contextmenu', event => event.preventDefault());
-            
             document.addEventListener('keydown', screenshotKeyHandler); 
 
-            // Start periodic extension check
             detectSpecificExtensionFootprints(); 
-            extensionCheckInterval = setInterval(detectSpecificExtensionFootprints, 5000); // Check every 5 seconds
+            extensionCheckInterval = setInterval(detectSpecificExtensionFootprints, EXTENSION_CHECK_INTERVAL); 
         }
 
         function disableProctoring() {
-            clearInterval(extensionCheckInterval); // Stop extension check
+            clearInterval(extensionCheckInterval); 
             document.removeEventListener('visibilitychange', visibilityChangeHandler);
             window.removeEventListener('blur', blurHandler);
             document.removeEventListener('touchstart', touchStartHandler);
@@ -438,74 +517,110 @@
             document.removeEventListener('keydown', screenshotKeyHandler); 
         }
 
-        // --- TIMER & LOGIC ---
+        // --- TIMER & NAVIGATION LOGIC ---
+
         function updateTimerDisplay() {
             const progressBar = document.getElementById('progressBar');
             const countdownTimer = document.getElementById('countdownValue'); 
-            if (progressBar) progressBar.style.width = ((timeLeft / TIME_PER_QUESTION) * 100) + '%';
-            if (countdownTimer) countdownTimer.textContent = timeLeft;
+
+            if (progressBar) progressBar.style.width = ((timeLeft / TOTAL_QUIZ_TIME) * 100) + '%';
+            if (countdownTimer) countdownTimer.textContent = formatTime(timeLeft);
         }
 
-        function startTimer() {
-            stopTimer();
-            timeLeft = TIME_PER_QUESTION;
+        function startTotalTimer() {
+            if (isTimerRunning) return; 
+
+            isTimerRunning = true;
             updateTimerDisplay();
             timerInterval = setInterval(() => {
                 timeLeft--;
                 updateTimerDisplay();
+
                 if (timeLeft <= 0) {
-                    stopTimer();
-                    studentResponses[currentQuestionIndex] = null;
-                    moveToNextQuestion();
+                    isQuizSubmitted = true; 
+                    stopTotalTimer();
+                    disableProctoring();
+                    exitFullScreen();
+                    calculateAndShowResults(true); 
                 }
             }, 1000);
         }
 
-        function stopTimer() { clearInterval(timerInterval); }
+        function stopTotalTimer() { 
+            clearInterval(timerInterval); 
+            isTimerRunning = false;
+        }
 
-        function moveToNextQuestion() {
-            currentQuestionIndex++;
-            if (currentQuestionIndex < quizQuestions.length) {
+        function jumpToQuestion(index) {
+            if (index >= 0 && index < quizQuestions.length) {
+                if (questionStatus[currentQuestionIndex] === 0) {
+                    questionStatus[currentQuestionIndex] = 1; 
+                }
+                currentQuestionIndex = index;
+                if (questionStatus[currentQuestionIndex] === 0) {
+                    questionStatus[currentQuestionIndex] = 1; 
+                }
                 renderQuizQuestion();
-                startTimer();
-            } else {
-                stopTimer();
-                disableProctoring();
-                exitFullScreen();
-                calculateAndShowResults(false);
+                renderQuestionPanel(); 
             }
+        }
+        
+        function navigateQuestions(direction) {
+            const newIndex = currentQuestionIndex + direction;
+            if (newIndex >= 0 && newIndex < quizQuestions.length) {
+                jumpToQuestion(newIndex);
+            }
+        }
+        
+        function saveCurrentAnswer(value) {
+            studentResponses[currentQuestionIndex] = value;
+            questionStatus[currentQuestionIndex] = 2; 
+            renderQuestionPanel(); 
+        }
+        
+        function toggleFlag() {
+            questionFlags[currentQuestionIndex] = !questionFlags[currentQuestionIndex];
+            renderQuizQuestion(); 
+            renderQuestionPanel(); 
         }
 
         // --- RENDERING VIEWS ---
 
-        function renderSignIn() {
+        async function renderSignIn() {
             APP_CONTAINER.className = "flex items-center justify-center min-h-screen p-4 bg-gray-50";
             APP_CONTAINER.innerHTML = `
                 <div class="w-full max-w-md bg-white rounded-xl shadow-2xl p-8">
                     <h2 class="text-3xl font-extrabold text-center text-gray-900 mb-6">Quiz Sign-In</h2>
-                    
-                    <div class="mobile-warning">
-                        <p class="font-bold text-red-800"><i class="fas fa-ban mr-2"></i>PROCTORING RULES:</p>
-                        <ul class="list-disc ml-5 mt-2 space-y-2 text-sm text-red-900 font-medium">
-                            <li>**STRICTLY NO BROWSER EXTENSIONS (AI, screen readers, VPNs, etc.).**</li>
-                            <li>Do NOT touch ANY edge of the screen (no side/top/bottom swipes).</li>
-                            <li>Do NOT switch apps, minimize the browser, or lose focus.</li>
-                            <li>Do NOT attempt to **Copy, Paste, or Screenshot** the quiz content.</li>
-                        </ul>
-                        <p class="mt-4 p-2 bg-red-100 border border-red-200 rounded text-xs text-center font-bold text-red-700">All forms of interference are logged and will lead to immediate exam termination after ${MAX_VIOLATIONS} warnings.</p>
+                    <div id="loadingQuestionsIndicator" class="text-center p-4 bg-yellow-50 rounded-lg border border-yellow-200 mb-4">
+                        <div class="spinner mx-auto mb-2"></div>
+                        <p class="text-sm font-semibold text-gray-700">Loading quiz data...</p>
                     </div>
-
                     <form id="signInForm" class="space-y-4 mt-6">
                         <div><label class="block text-sm font-medium text-gray-700">Name</label><input type="text" id="studentName" required class="mt-1 block w-full px-4 py-2 border rounded-lg"></div>
                         <div><label class="block text-sm font-medium text-gray-700">Email</label><input type="email" id="collegeEmail" required class="mt-1 block w-full px-4 py-2 border rounded-lg"></div>
                         <div><label class="block text-sm font-medium text-gray-700">Admission No.</label><input type="text" id="admissionNo" required class="mt-1 block w-full px-4 py-2 border rounded-lg"></div>
-                        <button type="submit" class="w-full py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 transition mt-6 shadow-lg font-bold">Start Quiz</button>
-                        
+                        <button type="submit" id="startQuizBtn" class="w-full py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 transition mt-6 shadow-lg font-bold" disabled>Start Quiz</button>
                         <button type="button" id="adminSignInButton" class="w-full py-3 bg-gray-500 text-white rounded-lg hover:bg-gray-600 transition font-bold mt-2">
                             <i class="fas fa-lock mr-2"></i>Admin Panel
                         </button>
                     </form>
                 </div>`;
+
+            const startQuizBtn = document.getElementById('startQuizBtn');
+            const loadingIndicator = document.getElementById('loadingQuestionsIndicator');
+
+            const success = await fetchQuizQuestionsFromSupabase();
+            
+            if (loadingIndicator) loadingIndicator.style.display = 'none';
+
+            if (success) {
+                startQuizBtn.disabled = false;
+                startQuizBtn.textContent = `Start Quiz (${quizQuestions.length} Questions)`;
+            } else {
+                startQuizBtn.textContent = 'Quiz Data Load Failed';
+                startQuizBtn.className = startQuizBtn.className.replace('bg-green-600', 'bg-red-600').replace('hover:bg-green-700', 'hover:bg-red-700');
+                return;
+            }
 
             document.getElementById('signInForm').addEventListener('submit', function(e) {
                 e.preventDefault();
@@ -516,63 +631,182 @@
                     email: document.getElementById('collegeEmail').value.trim(),
                     admissionNo: document.getElementById('admissionNo').value.trim()
                 };
-
-                shuffleArray(quizQuestions);
-                studentResponses = Array(quizQuestions.length).fill(null);
-
-                requestFullScreen();
-                enableProctoring();
-                setView('quiz');
+                setView('proctoringRules');
             });
             
             document.getElementById('adminSignInButton').onclick = () => setView('admin');
         }
 
+        function renderProctoringRules() {
+            APP_CONTAINER.className = "flex items-center justify-center min-h-screen p-4 bg-gray-50";
+            APP_CONTAINER.innerHTML = `
+                <div class="w-full max-w-lg bg-white rounded-xl shadow-2xl p-8">
+                    <h2 class="text-3xl font-extrabold text-center text-red-700 mb-6">⚠️ Proctoring Rules</h2>
+                    <p class="text-center text-gray-600 mb-6">You must agree to these rules before starting the exam.</p>
+                    
+                    <div class="p-5 bg-yellow-70 border border-yellow-200 rounded-lg">
+                        <p class="font-bold text-red-800 text-lg mb-3"><i class="fas fa-ban mr-2"></i>STRICT PROCTORING RULES:</p>
+                        <ul class="list-disc ml-6 mt-2 space-y-3 text-sm text-red-900 font-medium">
+                            <li>Use of any AI tools, extensions, tab-switch, copy/paste/screenshot shall be considered as a violation of rules.</li>
+                        </ul>
+                        <p class="mt-4 p-2 bg-red-100 border border-red-200 rounded text-xs text-center font-bold text-red-700">All forms of interference are logged and will lead to immediate termination of the exam after ${MAX_VIOLATIONS} warnings.</p>
+                    </div>
+
+                    <div class="flex items-center mt-6">
+                        <input type="checkbox" id="rulesCheckbox" class="h-5 w-5 text-green-600 border-gray-300 rounded focus:ring-green-500">
+                        <label for="rulesCheckbox" class="ml-3 text-sm font-medium text-gray-700">I have read and agree to all the rules above.</label>
+                    </div>
+
+                    <button id="agreeAndStartBtn" class="w-full py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 transition mt-6 shadow-lg font-bold" disabled>
+                        Agree & Start Quiz
+                    </button>
+                    <button id="cancelBtn" class="w-full py-3 bg-gray-500 text-white rounded-lg hover:bg-gray-600 transition font-bold mt-2">
+                        Cancel & Return to Sign-In
+                    </button>
+                </div>
+            `;
+            
+            const checkbox = document.getElementById('rulesCheckbox');
+            const startBtn = document.getElementById('agreeAndStartBtn');
+            const cancelBtn = document.getElementById('cancelBtn');
+
+            checkbox.onchange = () => { startBtn.disabled = !checkbox.checked; };
+            cancelBtn.onclick = () => setView('signin');
+
+            startBtn.onclick = () => {
+                shuffleArray(quizQuestions); 
+                requestFullScreen();
+                enableProctoring();
+                if (quizQuestions.length > 0) {
+                     questionStatus[0] = 1;
+                }
+                setView('quiz');
+            };
+        }
+
         function renderQuiz() {
             APP_CONTAINER.className = "flex items-start justify-center min-h-screen p-4 bg-gray-100";
             APP_CONTAINER.innerHTML = `
-                <div class="w-full max-w-3xl bg-white rounded-2xl shadow-xl p-8 mt-10 relative">
-                     <div class="h-4 w-full mb-4 border-b border-gray-100"></div>
-                    
-                    <div id="progressBarContainer"><div id="progressBar"></div></div>
-                    <div id="countdownTimer">Time: <span id="countdownValue">${TIME_PER_QUESTION}</span>s</div> 
-                    <div id="quizContent"></div>
+                <div class="w-full max-w-6xl grid grid-cols-1 md:grid-cols-4 gap-4 mt-10">
+                    <div class="md:col-span-3 bg-white rounded-2xl shadow-xl p-8 relative">
+                        <div class="mb-4 flex justify-between items-center">
+                            <h2 class="text-2xl font-bold text-gray-800">Question <span id="questionNumberDisplay">1</span> / ${quizQuestions.length}</h2>
+                            <button id="flagButton" class="px-4 py-2 rounded-lg text-sm font-semibold border transition shadow-sm"></button>
+                        </div>
+                        <div id="progressBarContainer"><div id="progressBar"></div></div>
+                        <div id="quizContent"></div>
+                    </div>
+
+                    <div class="md:col-span-1 bg-white rounded-2xl shadow-xl p-6 sticky top-4 self-start">
+                        <div id="countdownTimer">Time Remaining: <span id="countdownValue">${formatTime(timeLeft)}</span></div>
+                        <h3 class="text-lg font-bold text-gray-800 mb-3 mt-4">Question Status</h3>
+                        <div id="questionPanel" class="grid grid-cols-5 gap-2">
+                            </div>
+                        
+                        <p id="violationCountDisplay" class="text-sm text-center text-gray-500 font-mono pt-4 mt-6"></p>
+                    </div>
                 </div>`;
+                
+            startTotalTimer(); 
             renderQuizQuestion();
-            startTimer();
+            renderQuestionPanel();
+            
+            document.getElementById('flagButton').onclick = toggleFlag;
+        }
+
+        function renderQuestionPanel() {
+            const panel = document.getElementById('questionPanel');
+            if (!panel) return;
+            
+            panel.innerHTML = quizQuestions.map((q, index) => {
+                const status = questionStatus[index]; 
+                const isFlagged = questionFlags[index];
+                
+                let statusClass = 'unvisited'; 
+                if (status === 1) statusClass = 'viewed'; 
+                if (status === 2) statusClass = 'answered'; 
+                
+                if (index === currentQuestionIndex) statusClass = 'current'; 
+
+                return `
+                    <button class="q-panel-btn ${statusClass} ${isFlagged ? 'flagged' : ''}" onclick="jumpToQuestion(${index})">
+                        ${index + 1}
+                        ${isFlagged ? '<i class="fas fa-flag flag-icon"></i>' : ''}
+                    </button>
+                `;
+            }).join('');
         }
 
         function renderQuizQuestion() {
             const q = quizQuestions[currentQuestionIndex];
             const quizContent = document.getElementById('quizContent');
+            const qNumDisplay = document.getElementById('questionNumberDisplay');
+            const flagButton = document.getElementById('flagButton');
+
+            if(qNumDisplay) qNumDisplay.textContent = currentQuestionIndex + 1;
+
+            const optionsToRender = [...q.options];
+            shuffleArray(optionsToRender);
+            
+            const isFirst = currentQuestionIndex === 0;
+            const isLast = currentQuestionIndex === quizQuestions.length - 1;
+            const isFlagged = questionFlags[currentQuestionIndex];
+            
+            if (flagButton) {
+                if (isFlagged) {
+                    flagButton.innerHTML = `<i class="fas fa-flag mr-2"></i> Flagged (Click to Unflag)`;
+                    flagButton.className = "px-4 py-2 rounded-lg text-sm font-semibold transition shadow-sm bg-red-100 text-red-700 border-red-400 hover:bg-red-200";
+                } else {
+                    flagButton.innerHTML = `<i class="far fa-flag mr-2"></i> Flag for Review`;
+                    flagButton.className = "px-4 py-2 rounded-lg text-sm font-semibold transition shadow-sm bg-yellow-100 text-gray-700 border-yellow-400 hover:bg-yellow-200";
+                }
+            }
+
             quizContent.innerHTML = `
                 <div class="mb-6"><h3 class="text-xl font-semibold text-gray-800">${q.question}</h3></div>
                 <div class="space-y-4" id="optionsContainer">
-                    ${q.options.map(opt => `
+                    ${optionsToRender.map(opt => `
                         <label class="flex items-center p-4 border rounded-xl cursor-pointer hover:bg-blue-50 transition">
                             <input type="radio" name="answer" value="${opt}" class="h-5 w-5 text-blue-600" ${studentResponses[currentQuestionIndex] === opt ? 'checked' : ''}>
                             <span class="ml-4 text-gray-700 select-none">${opt}</span>
                         </label>`).join('')}
                 </div>
-                <div class="flex justify-end mt-8">
-                    <button id="nextButton" class="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 shadow-md font-semibold">
-                        ${currentQuestionIndex + 1 === quizQuestions.length ? 'Finish' : 'Next'}
+                
+                <div class="flex justify-between mt-8">
+                    <button id="prevButton" class="px-6 py-3 bg-gray-500 text-white rounded-lg hover:bg-gray-600 shadow-md font-semibold ${isFirst ? 'opacity-50 cursor-not-allowed' : ''}" ${isFirst ? 'disabled' : ''}>
+                        <i class="fas fa-arrow-left mr-2"></i> Previous
+                    </button>
+                    
+                    <button id="nextButton" class="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 shadow-md font-semibold ${isLast ? 'hidden' : ''}">
+                        Next <i class="fas fa-arrow-right ml-2"></i>
+                    </button>
+
+                    <button id="submitButton" class="px-6 py-3 bg-red-600 text-white rounded-lg hover:bg-green-700 shadow-md font-semibold ${isLast ? '' : 'hidden'}">
+                        <i class="fas fa-paper-plane mr-2"></i> Submit Final Exam
                     </button>
                 </div>
-                <p id="violationCountDisplay" class="mt-4 text-sm text-right text-gray-500 font-mono"></p>
+                
+                <p id="violationCountDisplayInner" class="mt-4 text-sm text-right text-gray-500 font-mono md:hidden">⚠️ Violations: ${proctoringViolations.total} / ${MAX_VIOLATIONS}</p>
             `;
 
-            document.getElementById('nextButton').onclick = (e) => {
-                e.stopPropagation();
-                const selected = document.querySelector('input[name="answer"]:checked');
-                studentResponses[currentQuestionIndex] = selected ? selected.value : null;
-                stopTimer();
-                moveToNextQuestion();
-            };
-            
             document.getElementById('optionsContainer').onchange = (e) => {
-                if (e.target.name === 'answer') studentResponses[currentQuestionIndex] = e.target.value;
+                if (e.target.name === 'answer') saveCurrentAnswer(e.target.value);
             };
+
+            document.getElementById('prevButton').onclick = () => navigateQuestions(-1);
+            document.getElementById('nextButton').onclick = () => navigateQuestions(1);
+
+            if (document.getElementById('submitButton')) {
+                 document.getElementById('submitButton').onclick = () => {
+                    isQuizSubmitted = true; 
+                    stopTotalTimer();
+                    disableProctoring();
+                    exitFullScreen();
+                    calculateAndShowResults(false);
+                };
+            }
+            
+            renderQuestionPanel(); 
         }
 
         async function calculateAndShowResults(wasTerminated) {
@@ -591,27 +825,44 @@
             const statusMsg = uploadStatus.success ? 'Saved to Database' : 'Upload Failed';
             const errorDetail = uploadStatus.success ? '' : `<p class="text-xs mt-2 text-red-600 font-bold break-words p-2 bg-red-50 rounded border border-red-200">${uploadStatus.message}</p>`;
 
-            APP_CONTAINER.className = "flex items-center justify-center min-h-screen p-4 bg-gray-50";
-            APP_CONTAINER.innerHTML = `
-                <div class="w-full max-w-lg bg-white rounded-2xl shadow-2xl p-10 text-center">
+            let mainIconHtml = '';
+            if (wasTerminated) {
+                mainIconHtml = `
+                    <div class="inline-flex items-center justify-center w-16 h-16 bg-red-100 rounded-full mb-6">
+                        <i class="fas fa-exclamation-triangle text-3xl text-red-600"></i>
+                    </div>
+                `;
+            } else {
+                mainIconHtml = `
                     <div class="inline-flex items-center justify-center w-16 h-16 bg-green-100 rounded-full mb-6">
                         <i class="fas fa-check-circle text-3xl text-green-600"></i>
                     </div>
+                `;
+            }
+            
+            const submissionStatusHtml = `
+                <div class="mb-6 p-3 rounded-lg ${statusClass} inline-block w-full">
+                    <div class="flex items-center justify-center">
+                        <i class="fas ${statusIcon} mr-2"></i> <span class="font-bold">${statusMsg}</span>
+                    </div>
+                    ${errorDetail}
+                </div>
+            `;
+            
+            const studentInfoHtml = `
+                <div class="bg-gray-50 p-4 rounded-lg mb-6 border border-gray-200">
+                    <p class="text-xl font-bold text-gray-900">${studentInfo.name}</p>
+                    <p class="text-sm text-gray-500 mt-1">Admission No: <span class="font-mono text-gray-700 font-semibold">${studentInfo.admissionNo}</span></p>
+                </div>
+            `;
+            
+            APP_CONTAINER.className = "flex items-center justify-center min-h-screen p-4 bg-gray-50";
+            APP_CONTAINER.innerHTML = `
+                <div class="w-full max-w-lg bg-white rounded-2xl shadow-2xl p-10 text-center">
+                    ${mainIconHtml}
                     <h2 class="text-3xl font-extrabold text-gray-900 mb-3">${wasTerminated ? 'Exam Terminated' : 'Quiz Submitted'}</h2>
                     
-                    <div class="bg-gray-50 p-4 rounded-lg mb-6 border border-gray-200">
-                        <p class="text-xl font-bold text-gray-900">${studentInfo.name}</p>
-                        <p class="text-sm text-gray-500 mt-1">Admission No: <span class="font-mono text-gray-700 font-semibold">${studentInfo.admissionNo}</span></p>
-                    </div>
-
-                    <div class="mb-6 p-3 rounded-lg ${statusClass} inline-block w-full">
-                        <div class="flex items-center justify-center">
-                            <i class="fas ${statusIcon} mr-2"></i> <span class="font-bold">${statusMsg}</span>
-                        </div>
-                        ${errorDetail}
-                    </div>
-
-                    <div class="bg-blue-50 p-6 rounded-xl mb-8 text-left">
+                    ${submissionStatusHtml} ${studentInfoHtml} <div class="bg-blue-50 p-6 rounded-xl mb-8 text-left">
                         <div class="flex justify-between mb-2"><span>Score:</span><span class="font-bold">${score} / ${quizQuestions.length}</span></div>
                         
                         <div class="border-t border-blue-100 pt-3 mt-3">
@@ -621,32 +872,55 @@
                         </div>
                     </div>
 
-                    <button onclick="setView('signin')" class="w-full py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700">Return to Sign-In</button>
+                    <button onclick="window.location.reload()" class="w-full py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700">Return to Sign-In</button>
                 </div>
             `;
         }
 
-        // --- ADMIN ---
+
         function renderAdminLogin() {
+            APP_CONTAINER.className = "flex items-center justify-center min-h-screen p-4 bg-gray-50";
             APP_CONTAINER.innerHTML = `
                 <div class="w-full max-w-sm bg-white rounded-xl shadow-xl p-8">
                     <h2 class="text-2xl font-bold text-center mb-6">Admin Login</h2>
                     <form id="adminLoginForm" class="space-y-4">
-                        <input type="text" id="adminId" placeholder="Admin ID" class="w-full px-4 py-2 border rounded-lg">
-                        <input type="password" id="adminPassword" placeholder="Password" class="w-full px-4 py-2 border rounded-lg">
+                        <input type="text" id="adminId" placeholder="Admin ID" required class="w-full px-4 py-2 border rounded-lg">
+                        <input type="password" id="adminPassword" placeholder="Password" required class="w-full px-4 py-2 border rounded-lg">
                         <button type="submit" class="w-full py-2 bg-red-600 text-white rounded-lg hover:bg-red-700">Login</button>
                         <button type="button" onclick="setView('signin')" class="w-full py-2 text-gray-600 border rounded-lg hover:bg-gray-50">Cancel</button>
                     </form>
                 </div>`;
             
-            document.getElementById('adminLoginForm').onsubmit = (e) => {
+            document.getElementById('adminLoginForm').onsubmit = async (e) => {
                 e.preventDefault();
-                if (document.getElementById('adminId').value === 'admin' && document.getElementById('adminPassword').value === 'admin123') setView('leaderboard');
-                else showTempMessage('Invalid Credentials', true);
+                const adminId = document.getElementById('adminId').value;
+                const adminPassword = document.getElementById('adminPassword').value;
+                
+                try {
+                    const { data, error } = await client.rpc('verify_admin_credentials', {
+                        input_id: adminId,
+                        input_password: adminPassword
+                    });
+
+                    if (error || typeof data !== 'boolean') {
+                        console.error('Login RPC Error:', error);
+                        showTempMessage('Database Error during login.', true);
+                        return;
+                    }
+
+                    if (data === true) {
+                        setView('leaderboard');
+                    } else {
+                        showTempMessage('Invalid Credentials', true);
+                    }
+
+                } catch (e) {
+                    console.error('Admin Login Exception:', e);
+                    showTempMessage('An unexpected error occurred during login.', true);
+                }
             };
         }
 
-        // --- SUPABASE LEADERBOARD WITH FILTERS ---
         function renderLeaderboard() {
             APP_CONTAINER.className = "flex items-start justify-center min-h-screen p-4 bg-gray-100";
             APP_CONTAINER.innerHTML = `
@@ -701,7 +975,7 @@
                 const searchTerm = document.getElementById('searchInput').value.trim();
                 const sortValue = document.getElementById('sortSelect').value;
                 const dateFilter = document.getElementById('dateFilter').value;
-                let query = client.from(SUPABASE_TABLE_NAME).select('*');
+                let query = client.from(SUPABASE_SUBMISSIONS_TABLE).select('*');
                 if (searchTerm) query = query.or(`student_name.ilike.%${searchTerm}%,admission_no.ilike.%${searchTerm}%`);
                 if (dateFilter === 'today') { const todayStart = new Date(); todayStart.setHours(0,0,0,0); query = query.gte('submission_time', todayStart.toISOString()); }
                 switch(sortValue) {
@@ -733,12 +1007,19 @@
             };
 
             document.getElementById('homeBtn').onclick = () => setView('signin');
-            document.getElementById('quizToggle').onclick = () => { isQuizActive = !isQuizActive; localStorage.setItem('isQuizActive', isQuizActive); renderLeaderboard(); };
+            document.getElementById('quizToggle').onclick = () => { 
+                isQuizActive = !isQuizActive; 
+                localStorage.setItem('isQuizActive', isQuizActive); 
+                renderLeaderboard(); 
+            };
             document.getElementById('refreshBtn').onclick = fetchAndRender;
             document.getElementById('sortSelect').addEventListener('change', fetchAndRender);
             document.getElementById('dateFilter').addEventListener('change', fetchAndRender);
             let searchTimeout;
-            document.getElementById('searchInput').addEventListener('input', () => { clearTimeout(searchTimeout); searchTimeout = setTimeout(fetchAndRender, 500); });
+            document.getElementById('searchInput').addEventListener('input', () => { 
+                clearTimeout(searchTimeout); 
+                searchTimeout = setTimeout(fetchAndRender, 500); 
+            });
             fetchAndRender();
         }
 
@@ -748,8 +1029,11 @@
             QUIZ_OFF_CONFIRM_BTN.onclick = () => { QUIZ_OFF_MODAL.style.display = 'none'; };
             
             const fsHandler = () => {
-                // If exiting fullscreen while quiz is active and modal is not showing, trigger a violation.
-                if (!document.fullscreenElement && !document.webkitFullscreenElement && currentQuestionIndex < quizQuestions.length && VIOLATION_MODAL.style.display !== 'flex') {
+                if (isQuizSubmitted) return; 
+                // FIX: Do not enforce fullscreen check on iOS/Android mobile as it's often unsupported
+                if (isIOS() || /Android/i.test(navigator.userAgent)) return;
+
+                if (!document.fullscreenElement && !document.webkitFullscreenElement && currentQuestionIndex < quizQuestions.length && VIOLATION_MODAL.style.display !== 'flex' && proctoringViolations.total < MAX_VIOLATIONS) {
                     handleProctoringViolation('windowSwitch', 'blur'); 
                 }
             };
