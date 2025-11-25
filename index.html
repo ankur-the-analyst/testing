@@ -1,15 +1,16 @@
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>ISB Quiz-1</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Testing</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <style>
         /* General Setup */
-        #app { min-height: 100vh; -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
+        #app { min-height: 100vh; }
         
         /* Quiz Timer Styles */
         #progressBarContainer { position: relative; height: 8px; background-color: #e5e7eb; border-radius: 4px; overflow: hidden; margin-bottom: 10px; }
@@ -89,6 +90,24 @@
         }
         .q-panel-btn:not(.current):hover { transform: scale(1.05); }
         .q-panel-btn.flagged:not(.current) { border-color: #b91c1c; } /* Red border for flagged */
+
+        /* ADDED: Print Styles: Hide control buttons when printing */
+        @media print {
+            .no-print {
+                display: none !important;
+            }
+            /* Ensure the report content is fully visible and clean */
+            #app {
+                margin: 0;
+                padding: 0;
+                min-height: auto;
+            }
+            .w-full.max-w-6xl {
+                box-shadow: none !important;
+                border: none !important;
+                padding: 0 !important;
+            }
+        }
     </style>
 </head>
 <body>
@@ -119,12 +138,13 @@
 
     <script>
         // --- SUPABASE CONFIGURATION ---
-        const SUPABASE_URL = 'https://tdxausibwaagbhnbgkgz.supabase.co'; 
-        const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRkeGF1c2lid2FhZ2JobmJna2d6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjMwNDgyMDYsImV4cCI6MjA3ODYyNDIwNn0.ApeJFTg-pQaV2gigOUTGpKnMY_AFnT1v5DPpYCCmOKY';
+        const SUPABASE_URL = 'https://ptcejmgkctinjzvvpudf.supabase.co'; 
+        const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InB0Y2VqbWdrY3Rpbmp6dnZwdWRmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjM3MDcwOTIsImV4cCI6MjA3OTI4MzA5Mn0.aNwE0o6u7uHfwlf0uYtGSnYeNPKNWt6MliezIGYjHPQ';
         
         const SUPABASE_SUBMISSIONS_TABLE = 'quiz_submissions'; 
         const SUPABASE_QUESTIONS_TABLE = 'quiz_questions';
         const STATIC_QUIZ_UUID = '5f4b3d2c-1a0e-9f8d-7c6b-5a4e3d2c1b0a';
+        const SUPABASE_STATUS_TABLE = 'quiz_status'; // <<< ADDED: Supabase table for global status
 
         // Initialize Supabase client
         const { createClient } = supabase;
@@ -145,14 +165,21 @@
         const TOTAL_QUIZ_TIME = 15 * 60; 
         let timeLeft = TOTAL_QUIZ_TIME; 
         let isTimerRunning = false; 
-        let isQuizSubmitted = false; 
-        let isQuizActive = localStorage.getItem('isQuizActive') === 'false' ? false : true; 
+        let isQuizSubmitted = false; // <<< ADDED: Flag to prevent violations after submission
+
+        // ADDED: State to track question timing
+        let questionTimings = [];
+        let currentQuestionStartTime = Date.now(); // Start time for the currently viewed question
+        // >>> END ADDED
+
+        // Allows Admin to globally toggle the quiz state
+        let isQuizActive = null; // <<< MODIFIED: Initialize as null, status will be fetched from DB
         
         let proctoringViolations = { total: 0, windowSwitch: 0, copyPaste: 0 };
         const MAX_VIOLATIONS = 3;
         
-        const WINDOW_SWITCH_COOLDOWN = 2000; // Increased cooldown for iPad task switching
-        const EXTENSION_CHECK_INTERVAL = 1000; 
+        const WINDOW_SWITCH_COOLDOWN = 500; 
+        const EXTENSION_CHECK_INTERVAL = 500; 
         
         let violationCooldown = false; 
         let extensionCheckInterval; 
@@ -171,20 +198,6 @@
         const LOADING_OVERLAY = document.getElementById('loadingOverlay');
 
         // --- UTILITIES ---
-
-        // iPad/iOS Detection Helper
-        function isIOS() {
-            return [
-                'iPad Simulator',
-                'iPhone Simulator',
-                'iPod Simulator',
-                'iPad',
-                'iPhone',
-                'iPod'
-            ].includes(navigator.platform)
-            // iPad on iOS 13 detection
-            || (navigator.userAgent.includes("Mac") && "ontouchend" in document);
-        }
 
         function generateUUID() {
             if (typeof crypto !== 'undefined' && crypto.randomUUID) {
@@ -230,7 +243,7 @@
         function showQuizOffModal() {
             const msg = document.getElementById('quizOffMessage');
             if (msg) {
-                msg.innerHTML = "The admin has <strong class='text-red-500'>not started</strong> the exam yet.<br><br>Please wait for further instructions.";
+                msg.innerHTML = "The admin has <strong class='text-red-500'>turned OFF</strong> the exam sign-in.<br><br>Please wait for further instructions.";
             }
             QUIZ_OFF_MODAL.style.display = 'flex';
         }
@@ -266,8 +279,36 @@
             return result; 
         }
 
+        // <<< ADDED: Function to fetch the global quiz active status
+        async function fetchQuizActiveStatus() {
+            try {
+                // Assuming you have a table 'quiz_status' with a single row and a column 'is_active' and ID=1
+                const { data, error } = await client
+                    .from(SUPABASE_STATUS_TABLE)
+                    .select('is_active')
+                    .limit(1)
+                    .single();
+
+                // PGRST116 is 'No rows returned' which can happen if the table is empty
+                if (error && error.code !== 'PGRST116') throw error; 
+                
+                // Default to true if no data found (safer approach)
+                isQuizActive = (data && data.is_active !== null) ? data.is_active : true; 
+                return isQuizActive;
+                
+            } catch (e) {
+                console.error('Fetch Quiz Status Exception:', e);
+                showTempMessage("Failed to load quiz status. Assuming ON.", true);
+                isQuizActive = true;
+                return isQuizActive;
+            }
+        }
+        // END ADDED >>>
+
+
         // --- DATABASE UPLOAD LOGIC ---
-        async function uploadResultToSupabase(resultData) {
+        // MODIFIED: Accepts detailedResponses (for student_responses_json) and timeLeftSeconds (for time_left_seconds)
+        async function uploadResultToSupabase(resultData, detailedResponses, timeLeftSeconds) {
             const submissionUUID = generateUUID(); 
             const dataToInsert = {
                 student_id: submissionUUID,
@@ -282,6 +323,10 @@
                 student_name: resultData.name,
                 college_email: resultData.email,
                 admission_no: resultData.admissionNo,
+                // --- ADDED NEW FIELDS ---
+                time_left_seconds: timeLeftSeconds,
+                student_responses_json: detailedResponses,
+                // --- END ADDED NEW FIELDS ---
             };
             try {
                 const { error } = await client.from(SUPABASE_SUBMISSIONS_TABLE).insert([dataToInsert]); 
@@ -300,6 +345,7 @@
         async function fetchQuizQuestionsFromSupabase() {
             LOADING_OVERLAY.style.display = 'flex';
             try {
+                // Fetch all required columns from your new table
                 const { data, error } = await client
                     .from(SUPABASE_QUESTIONS_TABLE)
                     .select('question, answer, option_a, option_b, option_c, option_d');
@@ -311,14 +357,16 @@
                     return false;
                 }
 
+                // Map the flat database data into the required JavaScript structure
                 quizQuestions = data.map(q => ({
                     question: q.question,
                     options: [q.option_a, q.option_b, q.option_c, q.option_d],
                     answer: q.answer
                 }));
                 
+                // Re-initialize state arrays
                 studentResponses = Array(quizQuestions.length).fill(null);
-                questionStatus = Array(quizQuestions.length).fill(0); 
+                questionStatus = Array(quizQuestions.length).fill(0); // 0=unvisited
                 questionFlags = Array(quizQuestions.length).fill(false);
 
                 return true;
@@ -330,13 +378,17 @@
                 LOADING_OVERLAY.style.display = 'none';
             }
         }
+        // --- END: QUESTION FETCH LOGIC ---
+
 
         // --- PROCTORING LOGIC ---
         function requestFullScreen() {
-            // Relaxed for iOS - don't show error msg if it fails, just try it
             const element = document.documentElement;
             if (element.requestFullscreen) {
-                element.requestFullscreen().catch(e => { console.log("Fullscreen skipped (iOS/Blocked)"); });
+                element.requestFullscreen().catch(e => {
+                    console.error("Fullscreen Request Failed on user click:", e);
+                    showTempMessage('Browser blocked automatic Full Screen. Please click the full screen icon manually.', true);
+                });
             }
             else if (element.mozRequestFullScreen) element.mozRequestFullScreen();
             else if (element.webkitRequestFullscreen) element.webkitRequestFullscreen();
@@ -356,7 +408,7 @@
                 MODAL_CONFIRM_BTN.textContent = 'Submit Exam Now';
                 MODAL_CONFIRM_BTN.className = "w-full py-3 px-4 rounded-lg text-white font-bold bg-red-700 hover:bg-red-800 transition shadow-lg";
                 
-                stopTotalTimer(); 
+                stopTotalTimer(); // Changed to stopTotalTimer
                 disableProctoring(); 
                 exitFullScreen();
                 
@@ -384,11 +436,13 @@
                     </div>
                 `;
                 
-                MODAL_CONFIRM_BTN.textContent = 'Resume Quiz';
+                MODAL_CONFIRM_BTN.textContent = 'Resume Quiz (Enable Full Screen)';
                 MODAL_CONFIRM_BTN.className = "w-full py-3 px-4 rounded-lg text-white font-bold bg-yellow-600 hover:bg-yellow-700 transition shadow-md";
                 MODAL_CONFIRM_BTN.onclick = () => {
                     VIOLATION_MODAL.style.display = 'none';
+                    
                     extensionCheckInterval = setInterval(detectSpecificExtensionFootprints, EXTENSION_CHECK_INTERVAL); 
+                    
                     requestFullScreen(); 
                 };
             }
@@ -396,8 +450,12 @@
         }
 
         function handleProctoringViolation(type, reason) {
+            // <<< MODIFIED: Prevent all violations if quiz has been submitted
             if (isQuizSubmitted) return; 
+            // Prevent violation counting if the state is unstable (e.g. timeout or termination processing)
             if (currentQuestionIndex >= quizQuestions.length) return; 
+            // >>> END MODIFIED
+            
             if (proctoringViolations.total >= MAX_VIOLATIONS) return; 
             
             if (type === 'windowSwitch') {
@@ -405,6 +463,7 @@
                 
                 proctoringViolations.windowSwitch++; 
                 violationCooldown = true;
+                
                 setTimeout(() => { violationCooldown = false; }, WINDOW_SWITCH_COOLDOWN); 
             } 
             else if (type === 'copyPaste') {
@@ -415,23 +474,30 @@
             proctoringViolations.total++;
 
             const vDisplay = document.getElementById('violationCountDisplay');
-            const vDisplayInner = document.getElementById('violationCountDisplayInner'); // Update both if exist
             if (vDisplay) vDisplay.innerHTML = `⚠️ Violations: ${proctoringViolations.total} / ${MAX_VIOLATIONS}`;
-            if (vDisplayInner) vDisplayInner.innerHTML = `⚠️ Violations: ${proctoringViolations.total} / ${MAX_VIOLATIONS}`;
 
             if (proctoringViolations.total >= MAX_VIOLATIONS) {
                 disableProctoring(); 
                 showViolationModal(true, reason); 
+                
             }
             else if (type === 'windowSwitch') {
-                showViolationModal(false, reason); 
+                    showViolationModal(false, reason); 
             }
         }
         
         function detectSpecificExtensionFootprints() {
-            if (currentQuestionIndex >= quizQuestions.length || violationCooldown || isQuizSubmitted) return; 
+            if (currentQuestionIndex >= quizQuestions.length || violationCooldown || isQuizSubmitted) return; // Added isQuizSubmitted
+            
+            // Check 1: Known injected global properties from common extensions
             if (window.Stranalytics || window.adblocker || window.betterTranslate || window.__REACT_DEVTOOLS_GLOBAL_HOOK__) {
                 handleProctoringViolation('windowSwitch', 'extension'); 
+                return;
+            }
+
+            // Check 2: Check for existence of Chrome/Firefox extension APIs
+            if (window.chrome && window.chrome.runtime) {
+                handleProctoringViolation('windowSwitch', 'extension');
                 return;
             }
         }
@@ -442,22 +508,11 @@
         
         const blurHandler = () => { 
             if(violationCooldown) return;
-            // FIX: Check if the active element is an input (keyboard appearing on iPad)
-            if (document.activeElement && (document.activeElement.tagName === 'INPUT' || document.activeElement.tagName === 'TEXTAREA')) {
-                return;
-            }
             handleProctoringViolation('windowSwitch', 'blur'); 
         };
 
         const touchStartHandler = (e) => {
-            if (currentQuestionIndex >= quizQuestions.length || isQuizSubmitted) return;
-            
-            // FIX: Disable coordinate-based swipe detection on iOS/Mobile to prevent false positives on click
-            // User interactions (clicks) are registering as touches near edges on small screens.
-            // Only relying on visibilityChange (tab switch) for mobile proctoring.
-            if (isIOS() || /Android/i.test(navigator.userAgent)) {
-                return; 
-            }
+            if (currentQuestionIndex >= quizQuestions.length || isQuizSubmitted) return; // Added isQuizSubmitted
 
             if(e.touches && e.touches.length > 0) {
                 const touchX = e.touches[0].clientX;
@@ -472,7 +527,7 @@
                 else if(touchY > screenHeight - EDGE_THRESHOLD) reason = 'swipeup';
                 
                 if (reason) {
-                    // e.preventDefault(); // Don't prevent default on touch, it blocks clicking
+                    e.preventDefault(); 
                     handleProctoringViolation('windowSwitch', reason);
                 }
             }
@@ -517,7 +572,7 @@
             document.removeEventListener('keydown', screenshotKeyHandler); 
         }
 
-        // --- TIMER & NAVIGATION LOGIC ---
+        // --- TIMER & NAVIGATION LOGIC (MODIFIED) ---
 
         function updateTimerDisplay() {
             const progressBar = document.getElementById('progressBar');
@@ -536,11 +591,13 @@
                 timeLeft--;
                 updateTimerDisplay();
 
+                // Auto-submit on timeout
                 if (timeLeft <= 0) {
-                    isQuizSubmitted = true; 
+                    isQuizSubmitted = true; // Set submitted flag for timeout auto-submit
                     stopTotalTimer();
                     disableProctoring();
                     exitFullScreen();
+                    // Auto-submit on finish (wasTerminated=true for time-out)
                     calculateAndShowResults(true); 
                 }
             }, 1000);
@@ -551,20 +608,39 @@
             isTimerRunning = false;
         }
 
+        // New function to jump to a specific question (MODIFIED: Added time tracking)
         function jumpToQuestion(index) {
             if (index >= 0 && index < quizQuestions.length) {
-                if (questionStatus[currentQuestionIndex] === 0) {
-                    questionStatus[currentQuestionIndex] = 1; 
+                // --- ADDED: TIME TRACKING FOR PREVIOUS QUESTION ---
+                const timeSpent = Math.max(0, Math.floor((Date.now() - currentQuestionStartTime) / 1000));
+                
+                // Log timing for the question we are leaving
+                if (currentQuestionIndex < quizQuestions.length) {
+                    questionTimings[currentQuestionIndex] = timeSpent;
                 }
+                
+                // Update the current question index
                 currentQuestionIndex = index;
+                // Set the start time for the new question
+                currentQuestionStartTime = Date.now();
+                // --- END ADDED TIME TRACKING ---
+
+                // Before changing, ensure the current question's status is at least 'viewed' if not answered
+                if (questionStatus[currentQuestionIndex] === 0) {
+                    questionStatus[currentQuestionIndex] = 1; // Mark as viewed
+                }
+                
+                // Mark the newly accessed question as 'viewed' if it was 'unvisited'
                 if (questionStatus[currentQuestionIndex] === 0) {
                     questionStatus[currentQuestionIndex] = 1; 
                 }
+                
                 renderQuizQuestion();
-                renderQuestionPanel(); 
+                renderQuestionPanel(); // Re-render panel to highlight current question
             }
         }
         
+        // New function to handle next/previous button clicks
         function navigateQuestions(direction) {
             const newIndex = currentQuestionIndex + direction;
             if (newIndex >= 0 && newIndex < quizQuestions.length) {
@@ -574,32 +650,38 @@
         
         function saveCurrentAnswer(value) {
             studentResponses[currentQuestionIndex] = value;
-            questionStatus[currentQuestionIndex] = 2; 
-            renderQuestionPanel(); 
+            questionStatus[currentQuestionIndex] = 2; // Mark as answered (green)
+            renderQuestionPanel(); // Update panel to show question as answered
         }
         
+        // New function to toggle the flag status (MODIFIED: Removed showTempMessage)
         function toggleFlag() {
             questionFlags[currentQuestionIndex] = !questionFlags[currentQuestionIndex];
-            renderQuizQuestion(); 
-            renderQuestionPanel(); 
+            renderQuizQuestion(); // Re-render to update the flag button state
+            renderQuestionPanel(); // Re-render to update the flag icon in the panel
+            
+            // Removed: showTempMessage logic
         }
 
         // --- RENDERING VIEWS ---
 
-        async function renderSignIn() {
+        async function renderSignIn() { // <<< MODIFIED: Function made async
             APP_CONTAINER.className = "flex items-center justify-center min-h-screen p-4 bg-gray-50";
             APP_CONTAINER.innerHTML = `
                 <div class="w-full max-w-md bg-white rounded-xl shadow-2xl p-8">
                     <h2 class="text-3xl font-extrabold text-center text-gray-900 mb-6">Quiz Sign-In</h2>
+                    
                     <div id="loadingQuestionsIndicator" class="text-center p-4 bg-yellow-50 rounded-lg border border-yellow-200 mb-4">
                         <div class="spinner mx-auto mb-2"></div>
                         <p class="text-sm font-semibold text-gray-700">Loading quiz data...</p>
                     </div>
+                    
                     <form id="signInForm" class="space-y-4 mt-6">
                         <div><label class="block text-sm font-medium text-gray-700">Name</label><input type="text" id="studentName" required class="mt-1 block w-full px-4 py-2 border rounded-lg"></div>
                         <div><label class="block text-sm font-medium text-gray-700">Email</label><input type="email" id="collegeEmail" required class="mt-1 block w-full px-4 py-2 border rounded-lg"></div>
                         <div><label class="block text-sm font-medium text-gray-700">Admission No.</label><input type="text" id="admissionNo" required class="mt-1 block w-full px-4 py-2 border rounded-lg"></div>
                         <button type="submit" id="startQuizBtn" class="w-full py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 transition mt-6 shadow-lg font-bold" disabled>Start Quiz</button>
+                        
                         <button type="button" id="adminSignInButton" class="w-full py-3 bg-gray-500 text-white rounded-lg hover:bg-gray-600 transition font-bold mt-2">
                             <i class="fas fa-lock mr-2"></i>Admin Panel
                         </button>
@@ -609,7 +691,9 @@
             const startQuizBtn = document.getElementById('startQuizBtn');
             const loadingIndicator = document.getElementById('loadingQuestionsIndicator');
 
-            const success = await fetchQuizQuestionsFromSupabase();
+            // <<< MODIFICATION 1 (Adapted): Fetch questions concurrently. Removed status fetch here.
+            const success = await fetchQuizQuestionsFromSupabase(); 
+            // END MODIFICATION 1 >>>
             
             if (loadingIndicator) loadingIndicator.style.display = 'none';
 
@@ -622,17 +706,20 @@
                 return;
             }
 
-            document.getElementById('signInForm').addEventListener('submit', function(e) {
+            // <<< MODIFICATION 2: Removed status check from here.
+            document.getElementById('signInForm').addEventListener('submit', function(e) { 
                 e.preventDefault();
-                if (!isQuizActive) { showQuizOffModal(); return; }
-
+                
                 studentInfo = {
                     name: document.getElementById('studentName').value.trim(),
                     email: document.getElementById('collegeEmail').value.trim(),
                     admissionNo: document.getElementById('admissionNo').value.trim()
                 };
+
+                // Move to Proctoring Rules view after successful sign-in
                 setView('proctoringRules');
             });
+            // END MODIFICATION 2 >>>
             
             document.getElementById('adminSignInButton').onclick = () => setView('admin');
         }
@@ -648,6 +735,7 @@
                         <p class="font-bold text-red-800 text-lg mb-3"><i class="fas fa-ban mr-2"></i>STRICT PROCTORING RULES:</p>
                         <ul class="list-disc ml-6 mt-2 space-y-3 text-sm text-red-900 font-medium">
                             <li>Use of any AI tools, extensions, tab-switch, copy/paste/screenshot shall be considered as a violation of rules.</li>
+
                         </ul>
                         <p class="mt-4 p-2 bg-red-100 border border-red-200 rounded text-xs text-center font-bold text-red-700">All forms of interference are logged and will lead to immediate termination of the exam after ${MAX_VIOLATIONS} warnings.</p>
                     </div>
@@ -673,17 +761,42 @@
             checkbox.onchange = () => { startBtn.disabled = !checkbox.checked; };
             cancelBtn.onclick = () => setView('signin');
 
-            startBtn.onclick = () => {
+            // <<< MODIFICATION 3: Added async handler with quiz active status check
+            startBtn.onclick = async () => {
+                // Ensure the button is disabled during the check to prevent double click
+                startBtn.disabled = true; 
+                startBtn.textContent = 'Checking quiz status...';
+                
+                const currentStatus = await fetchQuizActiveStatus(); 
+                
+                if (!currentStatus) { 
+                    showQuizOffModal(); 
+                    startBtn.textContent = 'Agree & Start Quiz';
+                    startBtn.disabled = false; // Re-enable for another attempt if not terminated
+                    return; 
+                }
+                
+                // If active, proceed with quiz start
                 shuffleArray(quizQuestions); 
                 requestFullScreen();
                 enableProctoring();
+                
+                // Initialize the first question's status as 'viewed' upon starting
                 if (quizQuestions.length > 0) {
                      questionStatus[0] = 1;
                 }
+
+                // --- ADDED: Initialize Timings ---
+                questionTimings = Array(quizQuestions.length).fill(0);
+                currentQuestionStartTime = Date.now();
+                // --- END ADDED ---
+
                 setView('quiz');
             };
+            // END MODIFICATION 3 >>>
         }
 
+        // Modified renderQuiz to accommodate the new structure (REMOVED LEGEND HERE)
         function renderQuiz() {
             APP_CONTAINER.className = "flex items-start justify-center min-h-screen p-4 bg-gray-100";
             APP_CONTAINER.innerHTML = `
@@ -707,26 +820,28 @@
                     </div>
                 </div>`;
                 
-            startTotalTimer(); 
+            startTotalTimer(); // Start the total quiz timer
             renderQuizQuestion();
             renderQuestionPanel();
             
+            // Event listener for flag button
             document.getElementById('flagButton').onclick = toggleFlag;
         }
 
+        // New function to render the Question Navigation Panel
         function renderQuestionPanel() {
             const panel = document.getElementById('questionPanel');
             if (!panel) return;
             
             panel.innerHTML = quizQuestions.map((q, index) => {
-                const status = questionStatus[index]; 
+                const status = questionStatus[index]; // 0=unvisited, 1=viewed, 2=answered
                 const isFlagged = questionFlags[index];
                 
                 let statusClass = 'unvisited'; 
-                if (status === 1) statusClass = 'viewed'; 
-                if (status === 2) statusClass = 'answered'; 
+                if (status === 1) statusClass = 'viewed'; // Yellow
+                if (status === 2) statusClass = 'answered'; // Green
                 
-                if (index === currentQuestionIndex) statusClass = 'current'; 
+                if (index === currentQuestionIndex) statusClass = 'current'; // Blue for current
 
                 return `
                     <button class="q-panel-btn ${statusClass} ${isFlagged ? 'flagged' : ''}" onclick="jumpToQuestion(${index})">
@@ -737,21 +852,26 @@
             }).join('');
         }
 
+
+        // Modified renderQuizQuestion for state persistence, new navigation, and flag button update
         function renderQuizQuestion() {
             const q = quizQuestions[currentQuestionIndex];
             const quizContent = document.getElementById('quizContent');
             const qNumDisplay = document.getElementById('questionNumberDisplay');
             const flagButton = document.getElementById('flagButton');
 
+            
             if(qNumDisplay) qNumDisplay.textContent = currentQuestionIndex + 1;
 
             const optionsToRender = [...q.options];
             shuffleArray(optionsToRender);
             
+            // Determine button visibility
             const isFirst = currentQuestionIndex === 0;
             const isLast = currentQuestionIndex === quizQuestions.length - 1;
             const isFlagged = questionFlags[currentQuestionIndex];
             
+            // Update Flag button display
             if (flagButton) {
                 if (isFlagged) {
                     flagButton.innerHTML = `<i class="fas fa-flag mr-2"></i> Flagged (Click to Unflag)`;
@@ -761,6 +881,7 @@
                     flagButton.className = "px-4 py-2 rounded-lg text-sm font-semibold transition shadow-sm bg-yellow-100 text-gray-700 border-yellow-400 hover:bg-yellow-200";
                 }
             }
+
 
             quizContent.innerHTML = `
                 <div class="mb-6"><h3 class="text-xl font-semibold text-gray-800">${q.question}</h3></div>
@@ -786,7 +907,7 @@
                     </button>
                 </div>
                 
-                <p id="violationCountDisplayInner" class="mt-4 text-sm text-right text-gray-500 font-mono md:hidden">⚠️ Violations: ${proctoringViolations.total} / ${MAX_VIOLATIONS}</p>
+                <p id="violationCountDisplay" class="mt-4 text-sm text-right text-gray-500 font-mono">⚠️ Violations: ${proctoringViolations.total} / ${MAX_VIOLATIONS}</p>
             `;
 
             document.getElementById('optionsContainer').onchange = (e) => {
@@ -798,7 +919,9 @@
 
             if (document.getElementById('submitButton')) {
                  document.getElementById('submitButton').onclick = () => {
+                    // <<< MODIFIED: Set flag before disabling
                     isQuizSubmitted = true; 
+                    // Confirmation pop-up removed to prevent proctoring violation.
                     stopTotalTimer();
                     disableProctoring();
                     exitFullScreen();
@@ -806,15 +929,38 @@
                 };
             }
             
-            renderQuestionPanel(); 
+            renderQuestionPanel(); // Ensure panel reflects changes after navigating
         }
 
+        // MODIFIED: Added logic to log final question time and compile detailed report
         async function calculateAndShowResults(wasTerminated) {
             LOADING_OVERLAY.style.display = 'flex';
+            
+            // --- ADDED: Log time for the final question and compile detailed report ---
+            const timeSpentFinal = Math.max(0, Math.floor((Date.now() - currentQuestionStartTime) / 1000));
+            if (currentQuestionIndex < quizQuestions.length) { // Check to ensure we are still within bounds
+                questionTimings[currentQuestionIndex] = timeSpentFinal;
+            }
+            
             let score = 0;
             quizQuestions.forEach((q, idx) => { if (studentResponses[idx] === q.answer) score++; });
+            
+            // Create the detailed submission report JSON
+            const detailedResponses = quizQuestions.map((q, idx) => ({
+                question_number: idx + 1,
+                question_text: q.question, // Include question text for easy report viewing
+                student_response: studentResponses[idx],
+                correct_answer: q.answer,
+                is_correct: studentResponses[idx] === q.answer,
+                time_spent_seconds: questionTimings[idx] || 0 // Use logged time or 0
+            }));
+            // --- END ADDED ---
+
             const result = saveResultLocally(studentInfo.name, studentInfo.email, studentInfo.admissionNo, score, quizQuestions.length, proctoringViolations);
-            const uploadStatus = await uploadResultToSupabase(result);
+            
+            // MODIFIED: Pass detailedResponses and timeLeft to the upload function
+            const uploadStatus = await uploadResultToSupabase(result, detailedResponses, timeLeft);
+            
             LOADING_OVERLAY.style.display = 'none';
             renderFinalScreen(score, wasTerminated, uploadStatus);
         }
@@ -825,6 +971,7 @@
             const statusMsg = uploadStatus.success ? 'Saved to Database' : 'Upload Failed';
             const errorDetail = uploadStatus.success ? '' : `<p class="text-xs mt-2 text-red-600 font-bold break-words p-2 bg-red-50 rounded border border-red-200">${uploadStatus.message}</p>`;
 
+            // Icon HTML (Red emergency sign for termination/timeout, Green for submission)
             let mainIconHtml = '';
             if (wasTerminated) {
                 mainIconHtml = `
@@ -840,6 +987,7 @@
                 `;
             }
             
+            // Submission Status Block
             const submissionStatusHtml = `
                 <div class="mb-6 p-3 rounded-lg ${statusClass} inline-block w-full">
                     <div class="flex items-center justify-center">
@@ -849,6 +997,7 @@
                 </div>
             `;
             
+            // Student Info Block
             const studentInfoHtml = `
                 <div class="bg-gray-50 p-4 rounded-lg mb-6 border border-gray-200">
                     <p class="text-xl font-bold text-gray-900">${studentInfo.name}</p>
@@ -856,6 +1005,7 @@
                 </div>
             `;
             
+            // --- MODIFICATION: Reorder submission status and student info blocks ---
             APP_CONTAINER.className = "flex items-center justify-center min-h-screen p-4 bg-gray-50";
             APP_CONTAINER.innerHTML = `
                 <div class="w-full max-w-lg bg-white rounded-2xl shadow-2xl p-10 text-center">
@@ -896,6 +1046,7 @@
                 const adminId = document.getElementById('adminId').value;
                 const adminPassword = document.getElementById('adminPassword').value;
                 
+                // --- SECURE LOGIN VIA SUPABASE RPC ---
                 try {
                     const { data, error } = await client.rpc('verify_admin_credentials', {
                         input_id: adminId,
@@ -918,10 +1069,143 @@
                     console.error('Admin Login Exception:', e);
                     showTempMessage('An unexpected error occurred during login.', true);
                 }
+                // --- END SECURE LOGIN ---
             };
         }
 
-        function renderLeaderboard() {
+        // --- NEW: FUNCTION TO PRINT/SAVE AS PDF ---
+        function saveReportAsPdf() {
+            // Set a print-specific title
+            document.title = 'Quiz Report - ' + (document.querySelector('.w-full.max-w-6xl h2').textContent || 'Submission');
+
+            window.print();
+            
+            // Restore original title after printing is initiated
+            document.title = 'ISB Quiz-1'; 
+            
+            // NOTE: The user must select "Save as PDF" in their browser's print dialogue.
+        }
+        // --- END NEW FUNCTION ---
+
+        // --- MODIFIED: FUNCTION TO RENDER DETAILED REPORT ---
+        async function renderSubmissionReport(submissionId) {
+            LOADING_OVERLAY.style.display = 'flex';
+
+            try {
+                const { data, error } = await client
+                    .from(SUPABASE_SUBMISSIONS_TABLE)
+                    .select('*')
+                    .eq('id', submissionId)
+                    .single();
+
+                if (error || !data) throw error || new Error("Submission not found.");
+
+                const reportData = data.student_responses_json || [];
+
+                // Calculate total time spent on questions 
+                const totalTimeSpent = reportData.reduce((sum, q) => sum + (q.time_spent_seconds || 0), 0);
+                const timeRemaining = data.time_left_seconds || 0;
+                const totalQuizDuration = TOTAL_QUIZ_TIME;
+
+                // Render the report view
+                APP_CONTAINER.className = "flex items-start justify-center min-h-screen p-4 bg-gray-100";
+                APP_CONTAINER.innerHTML = `
+                    <div class="w-full max-w-6xl bg-white rounded-2xl shadow-xl p-8 mt-10" id="reportContainer">
+                        <div class="flex justify-between items-center mb-6 border-b pb-4 no-print">
+                            <h2 class="text-2xl font-bold text-indigo-700">Quiz Submission Report</h2>
+                            <div class="flex space-x-3">
+                                <button onclick="saveReportAsPdf()" class="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 shadow text-sm"><i class="fas fa-file-pdf mr-1"></i> Save as PDF</button>
+                                <button onclick="setView('leaderboard')" class="px-4 py-2 bg-gray-500 text-white rounded-lg hover:bg-gray-600 shadow text-sm"><i class="fas fa-arrow-left mr-1"></i> Back to Leaderboard</button>
+                            </div>
+                        </div>
+                        
+                        <h1 class="text-3xl font-bold text-indigo-700 mb-6 hidden print:block">Quiz Submission Report</h1>
+
+                        <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
+                            <div class="p-4 bg-gray-50 rounded-lg border">
+                                <p class="text-sm font-semibold text-gray-500">Student Name</p>
+                                <p class="text-xl font-bold text-gray-900">${data.student_name}</p>
+                            </div>
+                            <div class="p-4 bg-gray-50 rounded-lg border">
+                                <p class="text-sm font-semibold text-gray-500">Admission No.</p>
+                                <p class="text-xl font-bold text-gray-900">${data.admission_no}</p>
+                            </div>
+                            <div class="p-4 bg-green-50 rounded-lg border border-green-200">
+                                <p class="text-sm font-semibold text-green-700">Score</p>
+                                <p class="text-xl font-bold text-green-900">${data.score} / ${data.total_questions} (${data.percentage}%)</p>
+                            </div>
+                            <div class="p-4 bg-red-50 rounded-lg border border-red-200">
+                                <p class="text-sm font-semibold text-red-700">Total Violations</p>
+                                <p class="text-xl font-bold text-red-900">${data.total_violations}</p>
+                            </div>
+                        </div>
+
+                        <div class="mb-8 p-6 bg-blue-50 rounded-lg border border-blue-200">
+                            <p class="text-lg font-bold text-blue-800 mb-3"><i class="far fa-clock mr-2"></i> Timing Analysis</p>
+                            <div class="grid grid-cols-2 gap-4 text-sm">
+                                <div>
+                                    <p class="font-medium text-gray-700">Quiz Duration:</p>
+                                    <p class="font-bold text-gray-900">${formatTime(totalQuizDuration)}</p>
+                                </div>
+                                <div>
+                                    <p class="font-medium text-gray-700">Total Time Spent on Questions:</p>
+                                    <p class="font-bold text-gray-900">${formatTime(totalTimeSpent)}</p>
+                                </div>
+
+                            </div>
+                        </div>
+                        
+                        <h3 class="text-xl font-bold text-gray-800 mb-4">Question Breakdown</h3>
+                        <div class="space-y-6">
+                            ${reportData.map(q => {
+                                // Logic to determine status, class, and icon
+                                const isAnswered = q.student_response !== null && q.student_response !== undefined;
+                                let cardClass = 'bg-gray-100 border-gray-300'; // Default: Not Attempted (Light Tone)
+                                let iconClass = 'fa-question-circle text-gray-600';
+                                let responseText = '<span class="italic text-gray-500">No Answer</span>';
+                                
+                                if (isAnswered) {
+                                    responseText = q.student_response;
+                                    if (q.is_correct) {
+                                        cardClass = 'bg-green-50 border-green-300'; // Correct (Green)
+                                        iconClass = 'fa-check-circle text-green-600';
+                                    } else {
+                                        cardClass = 'bg-red-50 border-red-300'; // Incorrect (Red)
+                                        iconClass = 'fa-times-circle text-red-600';
+                                    }
+                                }
+
+                                return `
+                                    <div class="p-5 rounded-lg border-2 ${cardClass} shadow-sm">
+                                        <div class="flex justify-between items-center mb-3">
+                                            <h4 class="text-lg font-bold text-gray-800">Q${q.question_number}: ${q.question_text}</h4>
+                                            <div class="flex items-center space-x-4">
+                                                <span class="text-sm font-semibold text-gray-700">Time Spent: <span class="font-bold text-indigo-700">${q.time_spent_seconds}s</span></span>
+                                                <i class="fas ${iconClass} text-2xl"></i>
+                                            </div>
+                                        </div>
+                                        <div class="space-y-2">
+                                            <p class="text-sm"><span class="font-medium text-gray-700">Student Response:</span> <span class="font-bold">${responseText}</span></p>
+                                            <p class="text-sm"><span class="font-medium text-gray-700">Correct Answer:</span> <span class="font-bold text-green-700">${q.correct_answer}</span></p>
+                                        </div>
+                                    </div>
+                                `;
+                            }).join('')}
+                        </div>
+                    </div>
+                `;
+
+            } catch (e) {
+                console.error('Error fetching submission report:', e);
+                showTempMessage(`Failed to load report: ${e.message}`, true);
+                setView('leaderboard'); // Return to leaderboard on error
+            } finally {
+                LOADING_OVERLAY.style.display = 'none';
+            }
+        }
+        // --- END MODIFIED FUNCTION ---
+
+        async function renderLeaderboard() { // <<< MODIFIED: Function made async
             APP_CONTAINER.className = "flex items-start justify-center min-h-screen p-4 bg-gray-100";
             APP_CONTAINER.innerHTML = `
                 <div class="w-full max-w-6xl bg-white rounded-2xl shadow-xl p-8 mt-10">
@@ -929,7 +1213,7 @@
                         <h2 class="text-2xl font-bold text-gray-800">Leaderboard</h2>
                         <div class="flex flex-wrap gap-2">
                             <button id="refreshBtn" class="px-4 py-2 bg-indigo-500 hover:bg-indigo-600 text-white rounded-lg shadow text-sm"><i class="fas fa-sync-alt mr-1"></i> Refresh</button>
-                            <button id="quizToggle" class="px-4 py-2 text-white rounded-lg ${isQuizActive ? 'bg-green-600' : 'bg-red-600'} text-sm">Quiz: ${isQuizActive?'ON':'OFF'}</button>
+                            <button id="quizToggle" class="px-4 py-2 text-white rounded-lg bg-gray-400 text-sm" disabled>Loading Status...</button>
                             <button id="homeBtn" class="px-4 py-2 border rounded-lg text-blue-600 border-blue-600 hover:bg-blue-50 text-sm">Log Out</button>
                         </div>
                     </div>
@@ -955,23 +1239,33 @@
                             <thead class="bg-gray-100">
                                 <tr>
                                     <th class="px-6 py-3 text-left text-xs font-bold text-gray-600 uppercase tracking-wider">#</th>
-                                    <th class="px-6 py-3 text-left text-xs font-bold text-gray-600 uppercase tracking-wider">Student</th>
+                                    <th class="px-6 py-3 text-left text-xs font-bold text-gray-600 uppercase tracking-wider">Student & Email</th>
                                     <th class="px-6 py-3 text-left text-xs font-bold text-gray-600 uppercase tracking-wider">Adm No</th>
                                     <th class="px-6 py-3 text-left text-xs font-bold text-gray-600 uppercase tracking-wider">Score</th>
                                     <th class="px-6 py-3 text-left text-xs font-bold text-gray-600 uppercase tracking-wider">Violations</th>
                                     <th class="px-6 py-3 text-left text-xs font-bold text-gray-600 uppercase tracking-wider">Date</th>
-                                </tr>
+                                    <th class="px-6 py-3 text-left text-xs font-bold text-gray-600 uppercase tracking-wider">Report</th> </tr>
                             </thead>
                             <tbody id="leaderboardBody" class="bg-white divide-y divide-gray-200">
-                                <tr><td colspan="6" class="p-10 text-center"><div class="spinner mx-auto"></div><p class="text-gray-500">Loading Data...</p></td></tr>
+                                <tr><td colspan="7" class="p-10 text-center"><div class="spinner mx-auto"></div><p class="text-gray-500">Loading Data...</p></td></tr>
                             </tbody>
                         </table>
                     </div>
                 </div>`;
 
+            // <<< MODIFICATION 4: Fetch status on load and update button
+            await fetchQuizActiveStatus();
+            const quizToggleBtn = document.getElementById('quizToggle');
+
+            quizToggleBtn.disabled = false;
+            quizToggleBtn.textContent = `Quiz: ${isQuizActive ? 'ON' : 'OFF'}`;
+            quizToggleBtn.className = `px-4 py-2 text-white rounded-lg ${isQuizActive ? 'bg-green-600' : 'bg-red-600'} text-sm`;
+            // END MODIFICATION 4 >>>
+
             const fetchAndRender = async () => {
                 const tbody = document.getElementById('leaderboardBody');
-                tbody.innerHTML = `<tr><td colspan="6" class="p-10 text-center"><div class="spinner mx-auto"></div><p class="text-gray-500">Updating...</p></td></tr>`;
+                // MODIFIED: Colspan is 7
+                tbody.innerHTML = `<tr><td colspan="7" class="p-10 text-center"><div class="spinner mx-auto"></div><p class="text-gray-500">Updating...</p></td></tr>`;
                 const searchTerm = document.getElementById('searchInput').value.trim();
                 const sortValue = document.getElementById('sortSelect').value;
                 const dateFilter = document.getElementById('dateFilter').value;
@@ -991,27 +1285,63 @@
                 try {
                     const { data, error } = await query;
                     if (error) throw error;
-                    if (!data || data.length === 0) { tbody.innerHTML = `<tr><td colspan="6" class="p-6 text-center text-gray-500">No records found matching criteria.</td></tr>`; return; }
+                    // MODIFIED: Colspan is 7
+                    if (!data || data.length === 0) { tbody.innerHTML = `<tr><td colspan="7" class="p-6 text-center text-gray-500">No records found matching criteria.</td></tr>`; return; }
                     tbody.innerHTML = data.map((entry, i) => {
                         return `
                         <tr class="${i%2?'bg-gray-50':'bg-white'} hover:bg-gray-100 transition">
                             <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 font-mono">${i+1}</td>
-                            <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">${entry.student_name || 'Unknown'}</td>
+                            
+                            <td class="px-6 py-4"> 
+                                <p class="text-sm font-medium text-gray-900">${entry.student_name || 'Unknown'}</p>
+                                <p class="text-xs text-gray-500">${entry.college_email || 'N/A'}</p>
+                            </td>
+
                             <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${entry.admission_no || '-'}</td>
                             <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900 font-bold">${entry.score} / ${entry.total_questions || 20}</td>
                             <td class="px-6 py-4 whitespace-nowrap text-sm ${entry.total_violations>0?'text-red-600 font-bold':'text-green-600'}">${entry.total_violations || 0}</td>
                             <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-400">${entry.submission_time ? new Date(entry.submission_time).toLocaleString() : 'N/A'}</td>
-                        </tr>`;
+                            <td class="px-6 py-4 whitespace-nowrap text-sm">
+                                <button onclick="renderSubmissionReport('${entry.id}')" class="text-indigo-600 hover:text-indigo-900 font-semibold text-xs py-1 px-3 border border-indigo-200 rounded-lg hover:bg-indigo-50 transition">View Report</button>
+                            </td> </tr>`;
                     }).join('');
-                } catch (err) { console.error(err); tbody.innerHTML = `<tr><td colspan="6" class="p-6 text-center text-red-600">Error: ${err.message}</td></tr>`; }
+                    // MODIFIED: Colspan is 7
+                } catch (err) { console.error(err); tbody.innerHTML = `<tr><td colspan="7" class="p-6 text-center text-red-600">Error: ${err.message}</td></tr>`; }
             };
 
             document.getElementById('homeBtn').onclick = () => setView('signin');
-            document.getElementById('quizToggle').onclick = () => { 
-                isQuizActive = !isQuizActive; 
-                localStorage.setItem('isQuizActive', isQuizActive); 
-                renderLeaderboard(); 
+            
+            // <<< MODIFICATION 5: Toggle Quiz Status in Supabase
+            quizToggleBtn.onclick = async () => { 
+                const newStatus = !isQuizActive; 
+                
+                LOADING_OVERLAY.style.display = 'flex';
+                quizToggleBtn.disabled = true;
+
+                try {
+                    // Update the single row (assuming ID=1 for the status row, as suggested in the setup)
+                    const { error } = await client
+                        .from(SUPABASE_STATUS_TABLE)
+                        .update({ is_active: newStatus })
+                        .eq('id', 1); 
+                    
+                    if (error) throw error;
+                    
+                    isQuizActive = newStatus; 
+                    
+                } catch (e) {
+                    console.error('Update Quiz Status Exception:', e);
+                    showTempMessage("Failed to update quiz status in database. Check RLS policies.", true);
+                } finally {
+                    LOADING_OVERLAY.style.display = 'none';
+                    quizToggleBtn.disabled = false;
+                    // Update button text/color
+                    quizToggleBtn.textContent = `Quiz: ${isQuizActive ? 'ON' : 'OFF'}`;
+                    quizToggleBtn.className = `px-4 py-2 text-white rounded-lg ${isQuizActive ? 'bg-green-600' : 'bg-red-600'} text-sm`;
+                }
             };
+            // END MODIFICATION 5 >>>
+
             document.getElementById('refreshBtn').onclick = fetchAndRender;
             document.getElementById('sortSelect').addEventListener('change', fetchAndRender);
             document.getElementById('dateFilter').addEventListener('change', fetchAndRender);
@@ -1029,10 +1359,10 @@
             QUIZ_OFF_CONFIRM_BTN.onclick = () => { QUIZ_OFF_MODAL.style.display = 'none'; };
             
             const fsHandler = () => {
+                // <<< MODIFIED: Check if already submitted
                 if (isQuizSubmitted) return; 
-                // FIX: Do not enforce fullscreen check on iOS/Android mobile as it's often unsupported
-                if (isIOS() || /Android/i.test(navigator.userAgent)) return;
-
+                
+                // If exiting fullscreen while quiz is active and modal is not showing, trigger a violation.
                 if (!document.fullscreenElement && !document.webkitFullscreenElement && currentQuestionIndex < quizQuestions.length && VIOLATION_MODAL.style.display !== 'flex' && proctoringViolations.total < MAX_VIOLATIONS) {
                     handleProctoringViolation('windowSwitch', 'blur'); 
                 }
